@@ -1,5 +1,5 @@
 """
-Tile-code and inherited code-family circuit generation with biased Pauli noise.
+Tile-code circuit-level simulation with biased Pauli noise.
 
 This code is inspired by the circuit-level surface-code study framework of
 Oscar Higgott, and adapts that style of circuit construction to the present
@@ -7,12 +7,12 @@ tile-code memory experiment using Stim + sinter + BP-OSD decoding.
 
 Notes
 -----
-- The active rotated-memory construction in this file corresponds to the
-  tile code used in this project.
-- Some helper functions and task labels retain inherited naming such as
-  "surface_code" and "toric_code" for compatibility with the original
-  framework structure.
-- The full logic and supported branches from the provided script are preserved.
+- The circuit construction implemented here corresponds to the tile code
+  used in this project.
+- The task label "surface_code:rotated_memory_x" is retained only as a
+  lightweight compatibility-style name for the active tile-code path.
+- This cleaned script is specialized to the tile-code memory-X simulation
+  and does not include unrotated, toric-code, or memory-Z branches.
 """
 
 from __future__ import annotations
@@ -118,7 +118,10 @@ def finish_tile_code_circuit(
     exclude_other_basis_detectors: bool = False,
     wraparound_length: Optional[int] = None,
 ) -> stim.Circuit:
-    """Finalize the circuit by assembling the head, body, and tail."""
+    """
+    Finalize the tile-code circuit by assembling the head, repeated body,
+    and tail sections.
+    """
     if params.rounds < 1:
         raise ValueError("Need rounds >= 1")
     if params.distance is not None and params.distance < 2:
@@ -152,6 +155,7 @@ def finish_tile_code_circuit(
     data_qubits.sort()
     measurement_qubits.sort()
     x_measurement_qubits.sort()
+    z_measurement_qubits.sort()
 
     data_coord_to_order: Dict[complex, int] = {}
     measure_coord_to_order: Dict[complex, int] = {}
@@ -215,7 +219,7 @@ def finish_tile_code_circuit(
     m = len(measurement_qubits)
     body.append_operation("SHIFT_COORDS", [], [0.0, 0.0, 1.0])
 
-    for m_index in sorted(measurement_qubits, key=lambda c: (c.real, c.imag)):
+    for m_index in sorted(measurement_qubits):
         m_coord = q2p[m_index]
         k = len(measurement_qubits) - measure_coord_to_order[m_coord] - 1
         if not exclude_other_basis_detectors or m_coord in chosen_basis_measure_coords:
@@ -265,7 +269,12 @@ def generate_rotated_tile_code_circuit(
     params: CircuitGenParameters,
     is_memory_x: bool,
 ) -> stim.Circuit:
-    """Generate the rotated tile-code circuit used in this project."""
+    """
+    Generate the tile-code memory circuit used in this project.
+
+    For the present cleaned script, this is the active circuit-construction
+    path used for memory-X simulations.
+    """
     if params.distance is not None:
         x_distance = params.distance
         z_distance = params.distance
@@ -336,14 +345,15 @@ def generate_rotated_tile_code_circuit(
         for q in stab:
             qubit_touched[q] = True
 
-    old_to_new: Dict[int, int] = {}
     data_qubit_coords: Dict[int, Tuple[int, int]] = {}
     new_idx = 0
     for i, touched in enumerate(qubit_touched):
         if touched:
-            old_to_new[i] = new_idx
             (x, y), orientation = idx_to_edge[i]
-            data_qubit_coords[new_idx] = (4 * x + 2, 4 * y) if orientation == "h" else (4 * x, 4 * y + 2)
+            if orientation == "h":
+                data_qubit_coords[new_idx] = (4 * x + 2, 4 * y)
+            else:
+                data_qubit_coords[new_idx] = (4 * x, 4 * y + 2)
             new_idx += 1
 
     bulk_limit = (l - 2) ** 2
@@ -383,7 +393,6 @@ def generate_rotated_tile_code_circuit(
     z_measure_coords: Set[complex] = set(hz_ancilla_coords.values())
 
     data = np.load(f"code_data/tilecode_l{l}.npz")
-    H_in = data["H_in"]
     lx = data["lx"]
     lz = data["lz"]
 
@@ -400,15 +409,11 @@ def generate_rotated_tile_code_circuit(
         coords = [index_to_coord_data[i] for i in support]
         z_observables.append(coords)
 
-    _ = H_in  # Preserved from the original script.
-
     all_coords = list(data_coords | x_measure_coords | z_measure_coords)
     min_x = int(min(c.real for c in all_coords))
     min_y = int(min(c.imag for c in all_coords))
     max_x = int(max(c.real for c in all_coords))
-    max_y = int(max(c.imag for c in all_coords))
     width = max_x - min_x + 1
-    _ = max_y  # Preserved computation structure from the original script.
 
     def coord_to_idx(q: complex) -> int:
         x = int(round(q.real)) - min_x
@@ -447,110 +452,13 @@ def generate_rotated_tile_code_circuit(
     )
 
 
-def generate_unrotated_surface_or_toric_code_circuit(
-    params: CircuitGenParameters,
-    is_memory_x: bool,
-    is_toric: bool,
-) -> stim.Circuit:
-    """Generate the inherited unrotated surface-code or toric-code circuit."""
-    d = params.distance
-    assert params.rounds > 0
-
-    data_coords: Set[complex] = set()
-    x_measure_coords: Set[complex] = set()
-    z_measure_coords: Set[complex] = set()
-    x_observable: List[complex] = []
-    z_observable: List[complex] = []
-
-    length = 2 * d if is_toric else 2 * d - 1
-    for x in range(length):
-        for y in range(length):
-            q = x + y * 1j
-            parity = (x % 2) != (y % 2)
-            if parity:
-                if x % 2 == 0:
-                    z_measure_coords.add(q)
-                else:
-                    x_measure_coords.add(q)
-            else:
-                data_coords.add(q)
-                if x == 0:
-                    x_observable.append(q)
-                if y == 0:
-                    z_observable.append(q)
-
-    order: List[complex] = [1, 1j, -1j, -1]
-
-    def coord_to_idx(q: complex) -> int:
-        return int(q.real + q.imag * length)
-
-    return finish_tile_code_circuit(
-        coord_to_idx,
-        data_coords,
-        x_measure_coords,
-        z_measure_coords,
-        params,
-        order,
-        order,
-        x_observable,
-        z_observable,
-        is_memory_x,
-        exclude_other_basis_detectors=params.exclude_other_basis_detectors,
-        wraparound_length=2 * d if is_toric else None,
-    )
-
-
-def generate_circuit_from_params(params: CircuitGenParameters) -> stim.Circuit:
-    """Dispatch circuit generation from a parameter object."""
-    if params.code_name == "surface_code":
-        if params.task == "rotated_memory_x":
-            return generate_rotated_tile_code_circuit(params, True)
-        if params.task == "rotated_memory_z":
-            return generate_rotated_tile_code_circuit(params, False)
-        if params.task == "unrotated_memory_x":
-            if params.distance is None:
-                raise NotImplementedError("Rectangular unrotated memories are not currently supported")
-            return generate_unrotated_surface_or_toric_code_circuit(
-                params=params,
-                is_memory_x=True,
-                is_toric=False,
-            )
-        if params.task == "unrotated_memory_z":
-            if params.distance is None:
-                raise NotImplementedError("Rectangular unrotated memories are not currently supported")
-            return generate_unrotated_surface_or_toric_code_circuit(
-                params=params,
-                is_memory_x=False,
-                is_toric=False,
-            )
-
-    if params.code_name == "toric_code":
-        if params.distance is None:
-            raise NotImplementedError("Rectangular toric codes are not currently supported")
-        if params.task == "unrotated_memory_x":
-            return generate_unrotated_surface_or_toric_code_circuit(
-                params=params,
-                is_memory_x=True,
-                is_toric=True,
-            )
-        if params.task == "unrotated_memory_z":
-            return generate_unrotated_surface_or_toric_code_circuit(
-                params=params,
-                is_memory_x=False,
-                is_toric=True,
-            )
-
-    raise ValueError(f"Unrecognised task: {params.task}")
-
-
 def generate_circuit(
-    code_task: str,
     *,
     rounds: int,
-    distance: Optional[int] = None,
-    x_distance: Optional[int] = None,
-    z_distance: Optional[int] = None,
+    x_distance: int,
+    z_distance: int,
     after_clifford_depolarization: float = 0.0,
+    after_single_clifford_probability: float = 0.0,
     before_round_data_depolarization: float = 0.0,
     before_measure_flip_probability: float = 0.0,
     after_reset_flip_probability: float = 0.0,
@@ -558,35 +466,32 @@ def generate_circuit(
     bias: float = 10000.0,
 ) -> stim.Circuit:
     """
-    Generate common circuits.
+    Dispatch circuit generation.
 
-    Supported inherited task labels:
-        - surface_code:rotated_memory_x
-        - surface_code:rotated_memory_z
-        - surface_code:unrotated_memory_x
-        - surface_code:unrotated_memory_z
-        - toric_code:unrotated_memory_x
-        - toric_code:unrotated_memory_z
+    Currently this cleaned script only supports:
+        surface_code:rotated_memory_x
+
+    Here, the retained label "surface_code" refers to the tile-code generator
+    path used in this project.
+
+    Returns:
+        A Stim circuit for the tile-code memory-X simulation.
     """
-    if distance is None and (x_distance is None or z_distance is None):
-        raise ValueError("Either the distance parameter or x_distance and z_distance parameters must be specified")
-
-    code_name, task = code_task.split(":")
     params = CircuitGenParameters(
-        code_name=code_name,
-        task=task,
+        code_name="surface_code",
+        task="rotated_memory_x",
         rounds=rounds,
-        distance=distance,
         x_distance=x_distance,
         z_distance=z_distance,
         after_clifford_depolarization=after_clifford_depolarization,
+        after_single_clifford_probability=after_single_clifford_probability,
         before_round_data_depolarization=before_round_data_depolarization,
         before_measure_flip_probability=before_measure_flip_probability,
         after_reset_flip_probability=after_reset_flip_probability,
-        bias=bias,
         exclude_other_basis_detectors=exclude_other_basis_detectors,
+        bias=bias,
     )
-    return generate_circuit_from_params(params)
+    return generate_rotated_tile_code_circuit(params, is_memory_x=True)
 
 
 def wilson_interval(k: int, n: int, z: float = 1.96) -> Tuple[float, float]:
@@ -602,6 +507,11 @@ def wilson_interval(k: int, n: int, z: float = 1.96) -> Tuple[float, float]:
 
 
 def main() -> None:
+    """
+    Run tile-code circuit-level simulations with biased Pauli noise,
+    decode using BP-OSD through sinter, and save logical error rates
+    with Wilson confidence intervals to CSV.
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument("l", type=int)
     parser.add_argument("m", type=int)
@@ -627,9 +537,7 @@ def main() -> None:
 
     tasks = []
     for p in error_rates:
-        params = CircuitGenParameters(
-            code_name="surface_code",
-            task="rotated_memory_x",
+        circuit = generate_circuit(
             rounds=8,
             x_distance=l,
             z_distance=m,
@@ -640,8 +548,6 @@ def main() -> None:
             after_single_clifford_probability=p,
             bias=bias,
         )
-
-        circuit = generate_rotated_tile_code_circuit(params, is_memory_x=True)
 
         tasks.append(
             sinter.Task(
