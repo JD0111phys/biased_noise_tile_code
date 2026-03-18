@@ -48,3 +48,9 @@ python finite_bias_circuit_level_simulation/Circuit_level_CSS.py
 The code used in this work is available at:
 
 https://github.com/JD0111phys/Biased_noise_tile_code
+
+## Contributors
+
+- Jagannath Das  
+- Sayandip Dhara  
+- Pedro Medina
