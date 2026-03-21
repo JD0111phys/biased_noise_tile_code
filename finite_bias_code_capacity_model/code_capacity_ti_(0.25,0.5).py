@@ -267,34 +267,32 @@ class css_decode_sim:
         return error
 
     def _encoded_error_rates_joint(self):
+        # Residual error after applying decoder correction
         residual_x = (self.error_x + self.bpd_dec_x) % 2
         residual_z = (self.error_z + self.bpd_dec_z) % 2
-
-        if ((self.lz @ residual_x) % 2).any():
-            lw = int(np.sum(residual_x))
-            if lw < self.min_logical_weight:
-                self.min_logical_weight = lw
-        elif ((self.lx @ residual_z) % 2).any():
-            lw = int(np.sum(residual_z))
+    
+        # Full row-wise symplectic logical-commutation test
+        # Each logical row is (lx_row | lz_row), so commutation is
+        # lz_row · residual_x + lx_row · residual_z  (mod 2)
+        comm = ((self.lz @ residual_x) + (self.lx @ residual_z)) % 2
+    
+        if comm.any():
+            lw = int(np.sum(residual_x) + np.sum(residual_z))
             if lw < self.min_logical_weight:
                 self.min_logical_weight = lw
         else:
             self.osdw_success_count += 1
-
+    
+        # Rates
         self.osdw_logical_error_rate = 1 - self.osdw_success_count / self.run_count
         self.osdw_logical_error_rate_eb = np.sqrt(
             (1 - self.osdw_logical_error_rate)
             * self.osdw_logical_error_rate
             / self.run_count
         )
-        self.osdw_word_error_rate = 1.0 - (1 - self.osdw_logical_error_rate) ** (
-            1 / self.K
-        )
-        self.osdw_word_error_rate_eb = (
-            self.osdw_logical_error_rate_eb
-            * ((1 - self.osdw_logical_error_rate_eb) ** (1 / self.K - 1))
-            / self.K
-        )
+    
+        self.osdw_word_error_rate = 0.0
+        self.osdw_word_error_rate_eb = 0.0
 
     def _construct_code(self):
         """
@@ -311,7 +309,7 @@ class css_decode_sim:
             self.lz = np.asarray(self.lz, dtype=np.uint8)
 
         if self.lx is not None:
-            self.K = int(self.lx.shape[0])
+            self.K = int(self.lx.shape[0]//2)
         elif getattr(self, "K", None) is None:
             self.K = 1
 
@@ -642,7 +640,7 @@ def create_tile_code(l, m, B=3):
     q = n // 2
 
     H_new = H_in.copy()
-    L = np.hstack([lx, lz]).copy()
+    L = qcode.l.toarray()
 
     for offset in range(q):
         c2 = q + offset
