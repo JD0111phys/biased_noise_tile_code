@@ -26,7 +26,7 @@ q = 0.5   # XY (Z -> Y) deformation probability
 # ============================================================
 # 1. Probabilistic Clifford deformation
 # ============================================================
-def apply_probabilistic_deformation(H, lx, lz, p, q, rng):
+def apply_probabilistic_deformation(H, L, p, q, rng):
     """
     Apply probabilistic deformation on each qubit using the provided RNG.
 
@@ -56,7 +56,7 @@ def apply_probabilistic_deformation(H, lx, lz, p, q, rng):
         Updated stabilizer and logical matrices after deformation.
     """
     n = lx.shape[1]
-    L = np.hstack((lx, lz))  # Combined logical operators
+    
 
     for i in range(n):
         r = rng.random()
@@ -91,13 +91,13 @@ def apply_probabilistic_deformation(H, lx, lz, p, q, rng):
 # H_in = qcode.h.toarray()
 # lx_in = lx.toarray()
 # lz_in = lz.toarray()
-# H_def, lx_def, lz_def = apply_probabilistic_deformation(H_in, lx_in, lz_in, p, q, rng)
+# H_def, lx_def, lz_def = apply_probabilistic_deformation(H_in, L, p, q, rng)
 
 
 # ============================================================
 # 2. Quarter-swap linear deformation
 # ============================================================
-def hadamard_on_quarters_with_logicals(H, lx, lz):
+def hadamard_on_quarters_with_logicals(H, L):
     """
     Swap the 2nd quarter of columns with the 4th quarter of columns
     in both the stabilizer matrix H and the logical operators (lx, lz).
@@ -107,16 +107,14 @@ def hadamard_on_quarters_with_logicals(H, lx, lz):
       - 2n is divisible by 4
       - lx and lz each have shape (k, n)
 
-    The same column permutation is applied to the concatenated logical matrix
-    L = [lx | lz].
-
+   
     Returns
     -------
     H_new, lx_new, lz_new : np.ndarray
         Deformed stabilizer and logical matrices.
     """
     H_new = H.copy()
-    L = np.hstack([lx, lz]).copy()
+    
 
     _, total_cols = H_new.shape
     if total_cols % 4 != 0:
@@ -149,13 +147,13 @@ def hadamard_on_quarters_with_logicals(H, lx, lz):
 
 # Example usage:
 # H_in, lx_in, lz_in = qcode.h.toarray(), lx, lz
-# H_XZ_output, lx_XZ_output, lz_XZ_output = hadamard_on_quarters_with_logicals(H_in, lx_in, lz_in)
+# H_XZ_output, lx_XZ_output, lz_XZ_output = hadamard_on_quarters_with_logicals(H_in, L)
 
 
 # ============================================================
 # 3. Translationally invariant deformation: TI(0.25, 0.5)
 # ============================================================
-def Deformation_on_Translational_invariant(H, lx, lz, l):
+def Deformation_on_Translational_invariant(H, L):
     """
     Translationally invariant deformation corresponding to TI(0.25, 0.5).
 
@@ -185,7 +183,7 @@ def Deformation_on_Translational_invariant(H, lx, lz, l):
         Deformed stabilizer and logical matrices.
     """
     H_new = H.copy()
-    L = np.hstack([lx, lz]).copy()
+    
 
     rows, total_cols = H_new.shape
     assert total_cols % 4 == 0, "2n must be divisible by 4"
@@ -244,13 +242,13 @@ def Deformation_on_Translational_invariant(H, lx, lz, l):
 
 # Example usage:
 # H_in, lx_in, lz_in = qcode.h.toarray(), lx, lz
-# H_XZ_output, lx_XZ_output, lz_XZ_output = Deformation_on_Translational_invariant(H_in, lx_in, lz_in, l)
+# H_XZ_output, lx_XZ_output, lz_XZ_output = Deformation_on_Translational_invariant(H_in, L)
 
 
 # ============================================================
 # 4. Translationally invariant XY deformation
 # ============================================================
-def Deformation_XY_Translational_invariant(H, lx, lz):
+def Deformation_XY_Translational_invariant(H, L):
     """
     Translationally invariant XY deformation.
 
@@ -282,7 +280,7 @@ def Deformation_XY_Translational_invariant(H, lx, lz):
     H_new = H.copy()
 
     # Combine logical operators
-    L = np.hstack([lx, lz]).copy()
+    
 
     rows, total_cols = H_new.shape
     assert total_cols % 2 == 0, "Expected H to have 2n columns"
@@ -314,4 +312,4 @@ def Deformation_XY_Translational_invariant(H, lx, lz):
     return H_new, lx_new, lz_new
 
 # Example usage:
-# H_xy_output = Deformation_XY_Translational_invariant(H_in, qcode.N)
+# H_xy_output = Deformation_XY_Translational_invariant(H_in,L)
