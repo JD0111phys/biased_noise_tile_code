@@ -96,7 +96,7 @@ def remap_stabilizer(stab, old_to_new):
     return [old_to_new[q] for q in stab if q in old_to_new]
 
 
-def apply_probabilistic_deformation(H, lx, lz, p, q, rng):
+def apply_probabilistic_deformation(H, L, p, q, rng):
     """
     Apply probabilistic single-qubit Clifford deformation independently.
 
@@ -112,8 +112,7 @@ def apply_probabilistic_deformation(H, lx, lz, p, q, rng):
     """
 
     n = lx.shape[1]
-    L = np.hstack((lx, lz))
-
+    
     for i in range(n):
 
         r = rng.random()
@@ -225,6 +224,7 @@ qcode.test()
 
 lx = qcode.lx.toarray()
 lz = qcode.lz.toarray()
+L = qcode.l.toarray()
 
 H_in = qcode.h.toarray()
 
@@ -299,7 +299,7 @@ for error_rate_ins in physical_error_rates:
         trial_seed_index += 1
 
         H_def, lx_def, lz_def = apply_probabilistic_deformation(
-            H_in.copy(), lx.copy(), lz.copy(), p, q, rng
+            H_in.copy(), L.copy(), p, q, rng
         )
 
         Hx_def = H_def[:, :qcode.N]
