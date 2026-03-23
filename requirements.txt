@@ -1,0 +1,15 @@
+# Core computation & data structures
+numpy
+scipy
+pandas
+
+# Quantum Simulation
+stim
+sinter
+bposd
+ldpc
+galois
+
+# Utilities
+tqdm
+pytest

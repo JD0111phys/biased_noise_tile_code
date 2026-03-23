@@ -55,7 +55,7 @@ def apply_probabilistic_deformation(H, L, p, q, rng):
     H_new, lx_new, lz_new : np.ndarray
         Updated stabilizer and logical matrices after deformation.
     """
-    n = lx.shape[1]
+    n = L.shape[1] // 2
     
 
     for i in range(n):
@@ -153,7 +153,7 @@ def hadamard_on_quarters_with_logicals(H, L):
 # ============================================================
 # 3. Translationally invariant deformation: TI(0.25, 0.5)
 # ============================================================
-def Deformation_on_Translational_invariant(H, L):
+def Deformation_on_Translational_invariant(H, L, l):
     """
     Translationally invariant deformation corresponding to TI(0.25, 0.5).
 

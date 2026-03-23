@@ -1,0 +1,43 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+
+# Jupyter Notebook (if applicable)
+.ipynb_checkpoints
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+
+# Heavy local simulation artifacts and output traces
+*.csv
+*.log
+results/
+results_scaling/
+results_*/
+
+# Data files (except essential code bounds)
+*.npy
+*.npz
+!finite_bias_circuit_level_simulation/code_data/*.npz

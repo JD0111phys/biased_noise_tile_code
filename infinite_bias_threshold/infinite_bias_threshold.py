@@ -33,19 +33,6 @@ from bposd.css import css_code
 
 
 # ============================================================
-# Lattice dimensions from command line
-# ============================================================
-if len(sys.argv) < 3:
-    print("Usage: python performance.py <l> <m>")
-    sys.exit(1)
-
-l = int(sys.argv[1])
-m = int(sys.argv[2])
-
-print(f"[INFO] Lattice dimensions: l = {l}, m = {m}")
-
-
-# ============================================================
 # Helper functions for periodic tile-code construction
 # ============================================================
 def get_edge_indices(l: int, m: int):
@@ -111,7 +98,7 @@ def apply_probabilistic_deformation(H, L, p, q, rng):
         XY       : (X,Z) -> (X+Z, Z)
     """
 
-    n = lx.shape[1]
+    n = L.shape[1] // 2
     
     for i in range(n):
 
@@ -144,224 +131,245 @@ def apply_probabilistic_deformation(H, L, p, q, rng):
 
     return H, lx_new, lz_new
 
-
-# ============================================================
-# Build periodic tile code
-# ============================================================
-edges = get_edge_indices(l, m)
-edge_to_idx = {edge: i for i, edge in enumerate(edges)}
-num_edges = len(edges)
-
-# Red (X-type)
-red_h_offsets = [(0, 0), (2, 1), (2, 2)]
-red_v_offsets = [(0, 2), (1, 2), (2, 0)]
-
-# Blue (Z-type)
-blue_h_offsets = [(0, 2), (1, 0), (2, 0)]
-blue_v_offsets = [(0, 0), (0, 1), (2, 2)]
-
-anchors = [(x, y) for x in range(l) for y in range(m)]
-
-red_stabilizers = []
-blue_stabilizers = []
-
-for anchor in anchors:
-
-    red_stabilizers.append(
-        get_stabilizer_support(anchor, red_h_offsets, red_v_offsets, l, m, edge_to_idx)
+def simulate_single_trial(H_in, L, p, q, error_rate_ins, qcode_N, rng):
+    H_def, lx_def, lz_def = apply_probabilistic_deformation(
+        H_in.copy(), L.copy(), p, q, rng
     )
 
-    blue_stabilizers.append(
-        get_stabilizer_support(anchor, blue_h_offsets, blue_v_offsets, l, m, edge_to_idx)
+    Hx_def = H_def[:, :qcode_N]
+
+    z_error_pure = (rng.random(qcode_N) < error_rate_ins).astype(np.uint8)
+
+    syndrome = (Hx_def @ z_error_pure) % 2
+
+    decoder = BpOsdDecoder(
+        Hx_def,
+        error_rate=float(error_rate_ins),
+        bp_method="product_sum",
+        max_iter=100,
+        schedule="serial",
+        osd_method="osd_e",
+        osd_order=8,
     )
 
+    correction = decoder.decode(syndrome)
 
-# ============================================================
-# Remove unsupported qubits
-# ============================================================
-qubit_touched = np.zeros(num_edges, dtype=bool)
+    residual = (correction + z_error_pure) % 2
 
-for stab in red_stabilizers + blue_stabilizers:
-    for q in stab:
-        qubit_touched[q] = True
+    logical_fail = (lx_def @ residual % 2).any()
+    
+    return int(logical_fail)
 
-old_to_new = {}
-new_idx = 0
+def main():
+    # ============================================================
+    # Lattice dimensions from command line
+    # ============================================================
+    if len(sys.argv) < 3:
+        print("Usage: python performance.py <l> <m>")
+        sys.exit(1)
 
-for i, touched in enumerate(qubit_touched):
-    if touched:
-        old_to_new[i] = new_idx
-        new_idx += 1
+    l = int(sys.argv[1])
+    m = int(sys.argv[2])
 
-num_qubits_final = new_idx
-
-red_stabilizers = [remap_stabilizer(stab, old_to_new) for stab in red_stabilizers]
-blue_stabilizers = [remap_stabilizer(stab, old_to_new) for stab in blue_stabilizers]
-
-red_stabilizers = [stab for stab in red_stabilizers if len(stab) > 0]
-blue_stabilizers = [stab for stab in blue_stabilizers if len(stab) > 0]
-
-Hx = np.array(
-    [stabilizer_to_vector(stab, num_qubits_final) for stab in red_stabilizers],
-    dtype=int,
-)
-
-Hz = np.array(
-    [stabilizer_to_vector(stab, num_qubits_final) for stab in blue_stabilizers],
-    dtype=int,
-)
-
-print(f"[INFO] Number of physical qubits after pruning: N = {num_qubits_final}")
-print(f"[INFO] Number of X stabilizers: {Hx.shape[0]}")
-print(f"[INFO] Number of Z stabilizers: {Hz.shape[0]}")
+    print(f"[INFO] Lattice dimensions: l = {l}, m = {m}")
 
 
-# ============================================================
-# Build CSS code
-# ============================================================
-qcode = css_code(Hx, Hz)
-qcode.test()
+    # ============================================================
+    # Build periodic tile code
+    # ============================================================
+    edges = get_edge_indices(l, m)
+    edge_to_idx = {edge: i for i, edge in enumerate(edges)}
+    num_edges = len(edges)
 
-lx = qcode.lx.toarray()
-lz = qcode.lz.toarray()
-L = qcode.l.toarray()
+    # Red (X-type)
+    red_h_offsets = [(0, 0), (2, 1), (2, 2)]
+    red_v_offsets = [(0, 2), (1, 2), (2, 0)]
 
-H_in = qcode.h.toarray()
+    # Blue (Z-type)
+    blue_h_offsets = [(0, 2), (1, 0), (2, 0)]
+    blue_v_offsets = [(0, 0), (0, 1), (2, 2)]
 
-print(f"[INFO] CSS code constructed successfully.")
-print(f"[INFO] qcode.N = {qcode.N}")
-print(f"[INFO] Number of logical qubits = {lx.shape[0]}")
+    anchors = [(x, y) for x in range(l) for y in range(m)]
 
+    red_stabilizers = []
+    blue_stabilizers = []
 
-# ============================================================
-# Deformation parameters (example values)
-# ============================================================
-p = 0.25
-q = 0.5
+    for anchor in anchors:
 
-physical_error_rates = np.linspace(0.01, 0.5, 20)
+        red_stabilizers.append(
+            get_stabilizer_support(anchor, red_h_offsets, red_v_offsets, l, m, edge_to_idx)
+        )
 
-
-# ============================================================
-# Seed handling
-# ============================================================
-seed_file = "master_seed_single.txt"
-
-if not os.path.exists(seed_file):
-
-    seed_val = int(SeedSequence(12345).generate_state(1)[0])
-
-    with open(seed_file, "w") as f:
-        f.write(f"{seed_val}\n")
-
-else:
-
-    with open(seed_file, "r") as f:
-        seed_val = int(f.readline().strip())
-
-print(f"[INFO] Using master seed = {seed_val}")
+        blue_stabilizers.append(
+            get_stabilizer_support(anchor, blue_h_offsets, blue_v_offsets, l, m, edge_to_idx)
+        )
 
 
-trials_per_error_rate = [
-    int(20000 + max(0, (0.25 - e)) * 80000) if e <= 0.25 else 20000
-    for e in physical_error_rates
-]
+    # ============================================================
+    # Remove unsupported qubits
+    # ============================================================
+    qubit_touched = np.zeros(num_edges, dtype=bool)
 
-master_seq = SeedSequence(seed_val)
-child_seeds = master_seq.spawn(sum(trials_per_error_rate))
+    for stab in red_stabilizers + blue_stabilizers:
+        for q in stab:
+            qubit_touched[q] = True
 
+    old_to_new = {}
+    new_idx = 0
 
-# ============================================================
-# Infinite-bias decoding simulation
-# ============================================================
-logical_error_rates = []
-bootstrap_standard_errors = []
+    for i, touched in enumerate(qubit_touched):
+        if touched:
+            old_to_new[i] = new_idx
+            new_idx += 1
 
-trial_seed_index = 0
+    num_qubits_final = new_idx
 
-for error_rate_ins in physical_error_rates:
+    red_stabilizers = [remap_stabilizer(stab, old_to_new) for stab in red_stabilizers]
+    blue_stabilizers = [remap_stabilizer(stab, old_to_new) for stab in blue_stabilizers]
 
-    num_trials = (
-        int(20000 + max(0, (0.25 - error_rate_ins)) * 80000)
-        if error_rate_ins <= 0.25
-        else 20000
+    red_stabilizers = [stab for stab in red_stabilizers if len(stab) > 0]
+    blue_stabilizers = [stab for stab in blue_stabilizers if len(stab) > 0]
+
+    Hx = np.array(
+        [stabilizer_to_vector(stab, num_qubits_final) for stab in red_stabilizers],
+        dtype=int,
     )
 
-    print(f"[INFO] Physical Z error rate = {error_rate_ins:.5f}, trials = {num_trials}")
+    Hz = np.array(
+        [stabilizer_to_vector(stab, num_qubits_final) for stab in blue_stabilizers],
+        dtype=int,
+    )
 
-    trial_outcomes = []
+    print(f"[INFO] Number of physical qubits after pruning: N = {num_qubits_final}")
+    print(f"[INFO] Number of X stabilizers: {Hx.shape[0]}")
+    print(f"[INFO] Number of Z stabilizers: {Hz.shape[0]}")
 
-    for _ in range(num_trials):
 
-        trial_seq = child_seeds[trial_seed_index]
-        rng = np.random.default_rng(trial_seq)
+    # ============================================================
+    # Build CSS code
+    # ============================================================
+    qcode = css_code(Hx, Hz)
+    qcode.test()
 
-        trial_seed_index += 1
+    lx = qcode.lx.toarray()
+    lz = qcode.lz.toarray()
+    L = qcode.l.toarray()
 
-        H_def, lx_def, lz_def = apply_probabilistic_deformation(
-            H_in.copy(), L.copy(), p, q, rng
+    H_in = qcode.h.toarray()
+
+    print(f"[INFO] CSS code constructed successfully.")
+    print(f"[INFO] qcode.N = {qcode.N}")
+    print(f"[INFO] Number of logical qubits = {lx.shape[0]}")
+
+
+    # ============================================================
+    # Deformation parameters (example values)
+    # ============================================================
+    p = 0.25
+    q = 0.5
+
+    physical_error_rates = np.linspace(0.01, 0.5, 20)
+
+
+    # ============================================================
+    # Seed handling
+    # ============================================================
+    seed_file = "master_seed_single.txt"
+
+    if not os.path.exists(seed_file):
+
+        seed_val = int(SeedSequence(12345).generate_state(1)[0])
+
+        with open(seed_file, "w") as f:
+            f.write(f"{seed_val}\n")
+
+    else:
+
+        with open(seed_file, "r") as f:
+            seed_val = int(f.readline().strip())
+
+    print(f"[INFO] Using master seed = {seed_val}")
+
+
+    trials_per_error_rate = [
+        int(20000 + max(0, (0.25 - e)) * 80000) if e <= 0.25 else 20000
+        for e in physical_error_rates
+    ]
+
+    master_seq = SeedSequence(seed_val)
+    child_seeds = master_seq.spawn(sum(trials_per_error_rate))
+
+
+    # ============================================================
+    # Infinite-bias decoding simulation
+    # ============================================================
+    logical_error_rates = []
+    bootstrap_standard_errors = []
+
+    trial_seed_index = 0
+
+    for error_rate_ins in physical_error_rates:
+
+        num_trials = (
+            int(20000 + max(0, (0.25 - error_rate_ins)) * 80000)
+            if error_rate_ins <= 0.25
+            else 20000
         )
 
-        Hx_def = H_def[:, :qcode.N]
+        print(f"[INFO] Physical Z error rate = {error_rate_ins:.5f}, trials = {num_trials}")
 
-        z_error_pure = (rng.random(qcode.N) < error_rate_ins).astype(np.uint8)
+        trial_outcomes = []
 
-        syndrome = (Hx_def @ z_error_pure) % 2
+        for _ in range(num_trials):
 
-        decoder = BpOsdDecoder(
-            Hx_def,
-            error_rate=float(error_rate_ins),
-            bp_method="product_sum",
-            max_iter=100,
-            schedule="serial",
-            osd_method="osd_e",
-            osd_order=8,
-        )
+            trial_seq = child_seeds[trial_seed_index]
+            rng = np.random.default_rng(trial_seq)
 
-        correction = decoder.decode(syndrome)
+            trial_seed_index += 1
 
-        residual = (correction + z_error_pure) % 2
+            logical_fail = simulate_single_trial(H_in, L, p, q, error_rate_ins, qcode.N, rng)
 
-        logical_fail = (lx_def @ residual % 2).any()
+            trial_outcomes.append(logical_fail)
 
-        trial_outcomes.append(int(logical_fail))
+        mean_ler = np.mean(trial_outcomes)
+        logical_error_rates.append(mean_ler)
 
-    mean_ler = np.mean(trial_outcomes)
-    logical_error_rates.append(mean_ler)
+        try:
 
-    try:
+            bs = bootstrap(
+                (np.array(trial_outcomes),),
+                np.mean,
+                n_resamples=499,
+                confidence_level=0.95,
+                method="BCa",
+            )
 
-        bs = bootstrap(
-            (np.array(trial_outcomes),),
-            np.mean,
-            n_resamples=499,
-            confidence_level=0.95,
-            method="BCa",
-        )
+            bootstrap_standard_errors.append(bs.standard_error)
 
-        bootstrap_standard_errors.append(bs.standard_error)
+        except Exception:
 
-    except Exception:
-
-        bootstrap_standard_errors.append(0.0)
+            bootstrap_standard_errors.append(0.0)
 
 
-# ============================================================
-# Save results
-# ============================================================
-df = pd.DataFrame(
-    {
-        "Physical Z Error Rates": physical_error_rates,
-        "Logical Error Rates": logical_error_rates,
-        "Bootstrap Standard Error": bootstrap_standard_errors,
-    }
-)
+    # ============================================================
+    # Save results
+    # ============================================================
+    df = pd.DataFrame(
+        {
+            "Physical Z Error Rates": physical_error_rates,
+            "Logical Error Rates": logical_error_rates,
+            "Bootstrap Standard Error": bootstrap_standard_errors,
+        }
+    )
 
-csv_filename = (
-    f"periodic_tile_code_infinite_bias_threshold_l{l}_m{m}_"
-    f"N_{qcode.N}_p{p}_q{q}.csv"
-)
+    csv_filename = (
+        f"periodic_tile_code_infinite_bias_threshold_l{l}_m{m}_"
+        f"N_{qcode.N}_p{p}_q{q}.csv"
+    )
 
-df.to_csv(csv_filename, index=False)
+    df.to_csv(csv_filename, index=False)
 
-print(f"[INFO] Results saved to {csv_filename}")
+    print(f"[INFO] Results saved to {csv_filename}")
+
+if __name__ == "__main__":
+    main()
