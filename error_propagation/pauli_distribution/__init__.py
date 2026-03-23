@@ -8,5 +8,6 @@ from .pauli_strings import (
     update_running_counts,
     effective_pauli_probabilities_from_counts,
     convert_gate_sequence,
-    error_propagation_simulation
+    error_propagation_simulation,
+    apply_gate_error_channel
 )

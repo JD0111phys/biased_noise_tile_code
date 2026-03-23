@@ -3,8 +3,12 @@
 from pathlib import Path
 import json
 import sys
-
+import logging
 import pytest
+import random
+from stim import PauliString
+from typing import List
+logger = logging.getLogger(__name__)
 
 
 # Ensure local package import works when tests are run from workspace root.
@@ -18,6 +22,7 @@ from pauli_distribution import (  # noqa: E402
 	load_running_counts,
 	save_running_counts,
 	update_running_counts,
+	apply_gate_error_channel,
 )
 
 
@@ -60,6 +65,377 @@ def test_get_pauli_string_input_validation(kwargs: dict, exc: type[Exception]) -
 	base.update(kwargs)
 	with pytest.raises(exc):
 		get_pauli_string(**base)
+
+
+def test_get_pauli_string_rejects_mismatched_initial_pauli_string_length() -> None:
+	with pytest.raises(ValueError, match="initial_pauli_string length"):
+		get_pauli_string(
+			keep_qubits=[0, 2],
+			samples=1,
+			p=0.0,
+			system_bias=10.0,
+			gate_sequence=[],
+			ancilla=[1],
+			qubit_platform="ideal",
+			initial_pauli_string="__",
+		)
+
+
+def test_get_pauli_string_uses_custom_initial_pauli_string() -> None:
+	samples = get_pauli_string(
+		keep_qubits=[0],
+		samples=4,
+		p=0.0,
+		system_bias=10.0,
+		gate_sequence=[],
+		ancilla=[],
+		qubit_platform="ideal",
+		random_seed=123,
+		initial_pauli_string="Z",
+	)
+
+	# With p=0 and no gates, the initial state should be preserved sample-by-sample.
+	assert samples == [3, 3, 3, 3]
+
+
+# Error at the end of circuit Tests
+# Load XXZX 4-qubit circuit Initial Pauli strings and Error propagations
+with open("xzzx_export.json", "r") as f:
+    data = json.load(f)
+
+init_Pauli_strings = data["seq_strings"]
+error_Propagation_lists = data["pauli_numeric_list_of_lists"]
+
+def test_4_qubit_XZZX_circuit_initial_Pauli_propagation() -> None:
+	for P_string, error_P in zip(init_Pauli_strings, error_Propagation_lists):
+		samples = get_pauli_string(
+			keep_qubits=[0,1,2,3,4],
+			samples=1,
+			p=0.0,
+			system_bias=10.0,
+			gate_sequence=[("CX", [0, 1]), ("CZ", [0, 2]), ("CZ", [0, 3]), ("CX", [0, 4])],
+			ancilla=[0],
+			qubit_platform="ideal",
+			random_seed=123,
+			initial_pauli_string=P_string,
+		)
+
+		assert samples == error_P
+
+def test_4_qubit_XZZX_circuit_initial_Pauli_propagation_converted_gate_sequence_native_CNOT() -> None:
+	for P_string, error_P in zip(init_Pauli_strings, error_Propagation_lists):
+		samples = get_pauli_string(
+			keep_qubits=[0,1,2,3,4],
+			samples=1,
+			p=0.0,
+			system_bias=10.0,
+			gate_sequence=convert_gate_sequence([("CX", [0, 1]), ("CZ", [0, 2]), ("CZ", [0, 3]), ("CX", [0, 4])], "CNOT_native"),
+			ancilla=[0],
+			qubit_platform="ideal",
+			random_seed=123,
+			initial_pauli_string=P_string,
+		)
+
+		assert samples == error_P
+	
+def test_4_qubit_XZZX_circuit_initial_Pauli_propagation_converted_gate_sequence_native_CZ() -> None:
+	for P_string, error_P in zip(init_Pauli_strings, error_Propagation_lists):
+		samples = get_pauli_string(
+			keep_qubits=[0,1,2,3,4],
+			samples=1,
+			p=0.0,
+			system_bias=10.0,
+			gate_sequence=convert_gate_sequence([("CX", [0, 1]), ("CZ", [0, 2]), ("CZ", [0, 3]), ("CX", [0, 4])], "CZ_native"),
+			ancilla=[0],
+			qubit_platform="ideal",
+			random_seed=123,
+			initial_pauli_string=P_string,
+		)
+
+		assert samples == error_P
+
+def test_4_qubit_XZZX_circuit_random_seed_consistency() -> None:
+	samples1 = get_pauli_string(
+		keep_qubits=[0,1,2,3,4],
+		samples=1,
+		p=0.5,
+		system_bias=10.0,
+		gate_sequence=[("CX", [0, 1]), ("CZ", [0, 2]), ("CZ", [0, 3]), ("CX", [0, 4])],
+		ancilla=[0],
+		qubit_platform="ideal",
+		random_seed=123,
+	)
+
+	samples2 = get_pauli_string(
+		keep_qubits=[0,1,2,3,4],
+		samples=1,
+		p=0.5,
+		system_bias=10.0,
+		gate_sequence=[("CX", [0, 1]), ("CZ", [0, 2]), ("CZ", [0, 3]), ("CX", [0, 4])],
+		ancilla=[0],
+		qubit_platform="ideal",
+		random_seed=123,
+	)
+	logger.info("Samples1: %s", samples1)
+	logger.info("Samples2: %s", samples2)
+
+	assert samples1 == samples2
+
+def test_4_qubit_XZZX_circuit_random_seed_consistency_2() -> None:
+	samples1 = get_pauli_string(
+		keep_qubits=[0,1,2,3,4],
+		samples=1,
+		p=0.5,
+		system_bias=10.0,
+		gate_sequence=[("CX", [0, 1]), ("CZ", [0, 2]), ("CZ", [0, 3]), ("CX", [0, 4])],
+		ancilla=[0],
+		qubit_platform="ideal",
+		random_seed=123,
+	)
+
+	samples2 = get_pauli_string(
+		keep_qubits=[0,1,2,3,4],
+		samples=1,
+		p=0.5,
+		system_bias=10.0,
+		gate_sequence=[("CX", [0, 1]), ("CZ", [0, 2]), ("CZ", [0, 3]), ("CX", [0, 4])],
+		ancilla=[0],
+		qubit_platform="ideal",
+		random_seed=124,
+	)
+	logger.info("Samples1: %s", samples1)
+	logger.info("Samples2: %s", samples2)
+
+	assert samples1 != samples2
+# Load XYHS 4-qubit circuit Initial Pauli strings and Error propagations
+with open("xyhs_export.json", "r") as f:
+    data_xyhs = json.load(f)
+
+init_Pauli_strings_xyhs = data_xyhs["seq_strings"]
+error_Propagation_lists_xyhs = data_xyhs["pauli_numeric_list_of_lists"]
+
+def test_4_qubit_XYHS_circuit_initial_Pauli_propagation() -> None:
+	for P_string, error_P in zip(init_Pauli_strings_xyhs, error_Propagation_lists_xyhs):
+		samples = get_pauli_string(
+			keep_qubits=[0,1,2,3,4],
+			samples=1,
+			p=0.0,
+			system_bias=10.0,
+			gate_sequence=[("CX", [0, 1]), ("CY", [0, 2]), ("H", [3]), ("S", [4])],
+			ancilla=[0],
+			qubit_platform="ideal",
+			random_seed=123,
+			initial_pauli_string=P_string,
+		)
+
+		assert samples == error_P
+
+def test_4_qubit_XYHS_circuit_initial_Pauli_propagation_2() -> None:
+	for P_string, error_P in zip(init_Pauli_strings_xyhs, error_Propagation_lists_xyhs):
+		samples = get_pauli_string(
+			keep_qubits=[0,1,2,3,4],
+			samples=1,
+			p=0.0,
+			system_bias=10.0,
+			gate_sequence=[("S_DAG", [4]),("H",[3]),("CY", [0, 2]),("CX", [0, 1])],
+			ancilla=[0],
+			qubit_platform="ideal",
+			random_seed=123,
+			initial_pauli_string=P_string,
+		)
+
+		assert samples == error_P
+
+def test_hadamard_independent_of_platform_specific_pauli_channels() -> None:
+	"""Test that the Hadamard gate behaves independently of platform-specific Pauli channels."""
+	samples_super = get_pauli_string(
+		keep_qubits=[0],
+		samples=1000,
+		p=0.1,
+		system_bias=10.0,
+		gate_sequence=[("H", [0])],
+		qubit_platform="superconducting",
+		random_seed=123,
+	)
+
+	
+	x_count_super = samples_super.count(1)
+	y_count_super = samples_super.count(2)
+	z_count_super = samples_super.count(3)
+
+	logger.info("Hadamard gate error counts superconducting: X=%d, Y=%d, Z=%d", x_count_super, y_count_super, z_count_super)
+
+	samples_NA = get_pauli_string(
+		keep_qubits=[0],
+		samples=1000,
+		p=0.1,
+		system_bias=10.0,
+		gate_sequence=[("H", [0])],
+		qubit_platform="neutral_atom",
+		random_seed=123,
+	)
+
+	
+	x_count_NA = samples_NA.count(1)
+	y_count_NA = samples_NA.count(2)
+	z_count_NA = samples_NA.count(3)
+
+	logger.info("Hadamard gate error counts neutral_atom: X=%d, Y=%d, Z=%d", x_count_NA, y_count_NA, z_count_NA)
+
+	samples_Tr_CNOT = get_pauli_string(
+		keep_qubits=[0],
+		samples=1000,
+		p=0.1,
+		system_bias=10.0,
+		gate_sequence=[("H", [0])],
+		qubit_platform="trapped_ion_cnot",
+		random_seed=123,
+	)
+
+	
+	x_count_Tr_CNOT = samples_Tr_CNOT.count(1)
+	y_count_Tr_CNOT = samples_Tr_CNOT.count(2)
+	z_count_Tr_CNOT = samples_Tr_CNOT.count(3)
+
+	logger.info("Hadamard gate error counts trapped_ion_CNOT: X=%d, Y=%d, Z=%d", x_count_Tr_CNOT, y_count_Tr_CNOT, z_count_Tr_CNOT)
+
+	samples_Tr_CZ = get_pauli_string(
+		keep_qubits=[0],
+		samples=1000,
+		p=0.1,
+		system_bias=10.0,
+		gate_sequence=[("H", [0])],
+		qubit_platform="trapped_ion_cz",
+		random_seed=123,
+	)
+	x_count_Tr_CZ = samples_Tr_CZ.count(1)
+	y_count_Tr_CZ = samples_Tr_CZ.count(2)
+	z_count_Tr_CZ = samples_Tr_CZ.count(3)
+
+	logger.info("Hadamard gate error counts trapped_ion_CZ: X=%d, Y=%d, Z=%d", x_count_Tr_CZ, y_count_Tr_CZ, z_count_Tr_CZ)
+
+	assert x_count_super == x_count_NA == x_count_Tr_CNOT == x_count_Tr_CZ
+	assert y_count_super == y_count_NA == y_count_Tr_CNOT == y_count_Tr_CZ
+	assert z_count_super == z_count_NA == z_count_Tr_CNOT == z_count_Tr_CZ
+
+
+def test_S_gate_independent_of_platform_specific_pauli_channels() -> None:
+	"""Test that the S gate behaves independently of platform-specific Pauli channels."""
+	samples_super = get_pauli_string(
+		keep_qubits=[0],
+		samples=1000,
+		p=0.1,
+		system_bias=10.0,
+		gate_sequence=[("S", [0])],
+		qubit_platform="superconducting",
+		random_seed=123,
+	)
+
+	
+	x_count_super = samples_super.count(1)
+	y_count_super = samples_super.count(2)
+	z_count_super = samples_super.count(3)
+
+	logger.info("S gate error counts superconducting: X=%d, Y=%d, Z=%d", x_count_super, y_count_super, z_count_super)
+
+	samples_NA = get_pauli_string(
+		keep_qubits=[0],
+		samples=1000,
+		p=0.1,
+		system_bias=10.0,
+		gate_sequence=[("S", [0])],
+		qubit_platform="neutral_atom",
+		random_seed=123,
+	)
+
+	
+	x_count_NA = samples_NA.count(1)
+	y_count_NA = samples_NA.count(2)
+	z_count_NA = samples_NA.count(3)
+
+	logger.info("S gate error counts neutral_atom: X=%d, Y=%d, Z=%d", x_count_NA, y_count_NA, z_count_NA)
+
+	samples_Tr_CNOT = get_pauli_string(
+		keep_qubits=[0],
+		samples=1000,
+		p=0.1,
+		system_bias=10.0,
+		gate_sequence=[("S", [0])],
+		qubit_platform="trapped_ion_cnot",
+		random_seed=123,
+	)
+
+	
+	x_count_Tr_CNOT = samples_Tr_CNOT.count(1)
+	y_count_Tr_CNOT = samples_Tr_CNOT.count(2)
+	z_count_Tr_CNOT = samples_Tr_CNOT.count(3)
+
+	logger.info("S gate error counts trapped_ion_CNOT: X=%d, Y=%d, Z=%d", x_count_Tr_CNOT, y_count_Tr_CNOT, z_count_Tr_CNOT)
+
+	samples_Tr_CZ = get_pauli_string(
+		keep_qubits=[0],
+		samples=1000,
+		p=0.1,
+		system_bias=10.0,
+		gate_sequence=[("S", [0])],
+		qubit_platform="trapped_ion_cz",
+		random_seed=123,
+	)
+	x_count_Tr_CZ = samples_Tr_CZ.count(1)
+	y_count_Tr_CZ = samples_Tr_CZ.count(2)
+	z_count_Tr_CZ = samples_Tr_CZ.count(3)
+
+	logger.info("S gate error counts trapped_ion_CZ: X=%d, Y=%d, Z=%d", x_count_Tr_CZ, y_count_Tr_CZ, z_count_Tr_CZ)
+
+	assert x_count_super == x_count_NA == x_count_Tr_CNOT == x_count_Tr_CZ
+	assert y_count_super == y_count_NA == y_count_Tr_CNOT == y_count_Tr_CZ
+	assert z_count_super == z_count_NA == z_count_Tr_CNOT == z_count_Tr_CZ
+
+def test_hadamard_error_channel() -> None:
+	gate = ("H", [0])
+	identity = "_"
+	samples = 100000
+	results: List[int] = []
+	#random.seed(123)
+	for _ in range(samples):
+		pauli = PauliString(identity)
+		pauli = apply_gate_error_channel(pauli, gate[0], gate[1], identity, "superconducting")
+		results.extend(list(pauli))
+	running_counts = {0: 0, 1: 0, 2: 0, 3: 0}  # I, X, Y, Z
+    # Update running counts with initial samples
+	running_counts = update_running_counts(running_counts, results)
+	effective_probs = effective_pauli_probabilities_from_counts(running_counts)
+	logger.info("Hadamard gate effective Pauli probabilities: %s", effective_probs)
+
+	err_dict_hadamard = {'I': 0.9970831318064503,
+						'X': 0.0004876108844646676,
+						'Y': 0.0009721305333010022,
+						'Z': 0.0014571267757840511}
+	assert all(abs(effective_probs[pauli] - err_dict_hadamard[pauli]) < 0.01 for pauli in err_dict_hadamard)
+
+def test_s_gate_error_channel() -> None:
+	gate = ("S", [0])
+	identity = "_"
+	samples = 100000
+	results: List[int] = []
+	#random.seed(123)
+	for _ in range(samples):
+		pauli = PauliString(identity)
+		pauli = apply_gate_error_channel(pauli, gate[0], gate[1], identity, "superconducting")
+		results.extend(list(pauli))
+	running_counts = {0: 0, 1: 0, 2: 0, 3: 0}  # I, X, Y, Z
+    # Update running counts with initial samples
+	running_counts = update_running_counts(running_counts, results)
+	effective_probs = effective_pauli_probabilities_from_counts(running_counts)
+	logger.info("S gate effective Pauli probabilities: %s", effective_probs)
+
+	err_dict_s = {'I': 0.9970240579376571,
+					'X': 1.4922560645502791e-07,
+					'Y': 1.4922560645502791e-07,
+					'Z': 0.00297564361112998}
+	assert all(abs(effective_probs[pauli] - err_dict_s[pauli]) < 0.01 for pauli in err_dict_s)
+
+
 
 
 def test_convert_gate_sequence_cz_native_transforms_cx_and_cy() -> None:
