@@ -523,9 +523,7 @@ def generate_circuit(
     """
     Dispatch circuit generation.
 
-    Currently this cleaned script only supports:
-        surface_code:rotated_memory_x
-    where "surface_code" here refers to your tile-code generator path.
+    
     """
     if distance is None and (x_distance is None or z_distance is None):
         raise ValueError(
@@ -549,7 +547,7 @@ def generate_circuit(
         bias=bias,
     )
 
-    if code_name == "surface_code" and task == "rotated_memory_x":
+    if code_name == "tile_code" and task == "memory_x":
         return generate_tile_code_memory_x_circuit(params)
 
     raise ValueError(f"Unsupported code task in this cleaned script: {code_task}")
@@ -583,7 +581,7 @@ def build_tasks(
 
     for p in error_rates:
         circuit = generate_circuit(
-            "surface_code:rotated_memory_x",
+            "tile_code:memory_x",
             rounds=rounds,
             x_distance=l,
             z_distance=m,
