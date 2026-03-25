@@ -5,14 +5,6 @@ This code is inspired by the circuit-level surface-code study framework of
 Oscar Higgott, and adapts that style of circuit construction to the present
 tile-code memory experiment using Stim + sinter + BP-OSD decoding.
 
-Notes
------
-- The circuit construction implemented here corresponds to the tile code
-  used in this project.
-- The task label "surface_code:rotated_memory_x" is retained only as a
-  lightweight compatibility-style name for the active tile-code path.
-- This cleaned script is specialized to the tile-code memory-X simulation
-  and does not include unrotated, toric-code, or memory-Z branches.
 """
 
 from __future__ import annotations
@@ -468,18 +460,10 @@ def generate_circuit(
     """
     Dispatch circuit generation.
 
-    Currently this cleaned script only supports:
-        surface_code:rotated_memory_x
-
-    Here, the retained label "surface_code" refers to the tile-code generator
-    path used in this project.
-
-    Returns:
-        A Stim circuit for the tile-code memory-X simulation.
     """
     params = CircuitGenParameters(
-        code_name="surface_code",
-        task="rotated_memory_x",
+        code_name="tile_code",
+        task="memory_x",
         rounds=rounds,
         x_distance=x_distance,
         z_distance=z_distance,
