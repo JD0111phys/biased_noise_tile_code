@@ -445,8 +445,9 @@ def get_pauli_string(
         qubit_platform: str = "superconducting",
         random_seed: Optional[int] = None,
     use_compressed_space: bool = True,
-    initial_pauli_string: Optional[str] = None
-) -> List[int]:
+    initial_pauli_string: Optional[str] = None,
+    return_counts: bool = False,
+) -> List[int] | Dict[int, int]:
     """
     Generates a flattened list of noisy Pauli values by simulating gate operations and error insertion.
 
@@ -470,12 +471,17 @@ def get_pauli_string(
         use_compressed_space: If True, operates only on used qubits for massive speedup (default).
         initial_pauli_string: Optional initial Pauli string in compressed qubit space.
             If not provided, starts from identity on all compressed qubits.
+        return_counts: If True, return accumulated counts
+            ``{0: I_count, 1: X_count, 2: Y_count, 3: Z_count}`` instead of
+            a flattened sample list.
 
     Returns:
-        A flattened list of Pauli values (0=I, 1=X, 2=Y, 3=Z) with length
-        samples * len(sorted(set(keep_qubits) | set(ancilla))). Data is appended
-        sample-by-sample, with qubits ordered by compressed index induced from
-        sorted(set(keep_qubits) | set(ancilla)).
+        If ``return_counts`` is False (default):
+        a flattened list of Pauli values (0=I, 1=X, 2=Y, 3=Z) with length
+        ``samples * len(sorted(set(keep_qubits) | set(ancilla)))``.
+
+        If ``return_counts`` is True:
+        cumulative counts ``{0: I_count, 1: X_count, 2: Y_count, 3: Z_count}``.
 
     Raises:
         NotImplementedError: If use_compressed_space is False.
@@ -544,6 +550,7 @@ def get_pauli_string(
     # Precompute gate's Tableau
     TABLEAU_CACHE = {name: Tableau.from_named_gate(name) for name, _ in effective_gate_sequence}
     flattened_result: List[int] = []
+    running_counts = {0: 0, 1: 0, 2: 0, 3: 0}
     if qubit_platform != 'ideal':
         for _ in range(samples):
 
@@ -569,7 +576,11 @@ def get_pauli_string(
             # ERROR BEFORE MEASUREMENT
             pauli = apply_error(pauli, identity, effective_keep_qubits, weights_init_meas)
 
-            flattened_result.extend(list(pauli)) # type: ignore
+            if return_counts:
+                for value in pauli:
+                    running_counts[int(value)] += 1
+            else:
+                flattened_result.extend(list(pauli)) # type: ignore
     else:
         # Ideal compilation path: skip hardware-specific gate error channel.
         for _ in range(samples):
@@ -582,8 +593,14 @@ def get_pauli_string(
             # ERROR BEFORE MEASUREMENT
             pauli = apply_error(pauli, identity, effective_keep_qubits, weights_init_meas)
 
-            flattened_result.extend(list(pauli)) # type: ignore
+            if return_counts:
+                for value in pauli:
+                    running_counts[int(value)] += 1
+            else:
+                flattened_result.extend(list(pauli)) # type: ignore
 
+    if return_counts:
+        return running_counts
     return flattened_result
 
 #----------------- STORING DATA FUNCTIONS -----------------#
@@ -703,7 +720,8 @@ def error_propagation_simulation(
     p_param: float, system_bias: float, qubit_platform: str,
     gate_sequence: List[GateOp],
     samples_per_iteration: int,total_samples: int, chosen_seed: int,
-    timestamp: str
+    timestamp: str,
+    save_every: int = 1,
     ) -> Tuple[str,str]: 
     """
     Run iterative Pauli-error propagation simulation until convergence or sample cap.
@@ -721,8 +739,12 @@ def error_propagation_simulation(
         gate_sequence: Circuit gate sequence as (gate_name, targets) tuples.
         samples_per_iteration: Number of samples generated per iteration.
         total_samples: Maximum total sample budget used to compute max iterations.
-        chosen_seed: Base random seed. Iteration i uses chosen_seed + i.
+        chosen_seed: Optional initial random seed used to initialize sampling.
+            Subsequent iterations continue from the ongoing RNG state and are
+            not reseeded.
         timestamp: Suffix used in output filenames.
+        save_every: Number of iterations to buffer before appending progress
+            and counts to disk. Use 1 to preserve per-iteration writes.
 
     Returns:
         Tuple of (progress_file, counts_file) output paths.
@@ -738,9 +760,11 @@ def error_propagation_simulation(
         raise ValueError("samples_per_iteration must be > 0.")
     if total_samples < 0:
         raise ValueError("total_samples must be >= 0.")
+    if save_every <= 0:
+        raise ValueError("save_every must be > 0.")
 
     initial_samples = min(samples_per_iteration, total_samples)
-    new_samples = get_pauli_string(
+    initial_counts_raw = get_pauli_string(
         samples=initial_samples,
         keep_qubits=keep_qubits,
         p=p_param,
@@ -748,13 +772,13 @@ def error_propagation_simulation(
         qubit_platform=qubit_platform,
         gate_sequence=gate_sequence,
         ancilla=ancilla,
-        random_seed=chosen_seed
+        random_seed=chosen_seed,
+        return_counts=True,
     )
+    initial_counts = cast(Dict[int, int], initial_counts_raw)
 
     # Initialize running counts for efficient probability calculation
-    running_counts = {0: 0, 1: 0, 2: 0, 3: 0}  # I, X, Y, Z
-    # Update running counts with initial samples
-    running_counts = update_running_counts(running_counts, new_samples)
+    running_counts = {0: initial_counts.get(0, 0), 1: initial_counts.get(1, 0), 2: initial_counts.get(2, 0), 3: initial_counts.get(3, 0)}
     # Calculate effective probabilities
     effective_current = effective_pauli_probabilities_from_counts(running_counts)
     # Calculate bias for initial probabilities
@@ -774,18 +798,17 @@ def error_propagation_simulation(
     convergence = 100.0
     iteration = 0
     generated_samples = initial_samples
-    consecutive_convergence_count = 0  # Track consecutive iterations with convergence < 1e-05
+    consecutive_convergence_count = 0  # Track consecutive iterations with convergence < 1e-07
     required_consecutive_iterations = 30  # Number of consecutive iterations required
+    pending_counts_rows: List[Dict[str, Any]] = []
+    pending_progress_lines: List[str] = []
 
     # convergence threshold is set to 1e-07 to ensure we are well below the 1e-05 target for bias convergence, accounting for fluctuations in X and Y probabilities
     while consecutive_convergence_count < required_consecutive_iterations and generated_samples < total_samples:
         iteration += 1
         current_batch_samples = min(samples_per_iteration, total_samples - generated_samples)
-        
-        # Use different random seed for each iteration
-        current_seed = chosen_seed + iteration
-        
-        new_samples = get_pauli_string(
+
+        new_counts_raw = get_pauli_string(
                 samples=current_batch_samples,
                 keep_qubits=keep_qubits,
                 p=p_param,
@@ -793,16 +816,22 @@ def error_propagation_simulation(
                 qubit_platform=qubit_platform,
                 gate_sequence=gate_sequence,
                 ancilla=ancilla,
-                random_seed=current_seed
+            random_seed=None,
+            return_counts=True,
         )
+        new_counts = cast(Dict[int, int], new_counts_raw)
         generated_samples += current_batch_samples
         
-        # Update running counts efficiently instead of recalculating from entire history
-        running_counts = update_running_counts(running_counts, new_samples)
+        # Update running counts from per-batch counts (avoids flattened list materialization).
+        for pauli_type in [0, 1, 2, 3]:
+            running_counts[pauli_type] += new_counts.get(pauli_type, 0)
         effective_new = effective_pauli_probabilities_from_counts(running_counts)
         
         # Save updated running counts
-        save_running_counts(running_counts, counts_file, append=True, seed=current_seed)
+        pending_counts_rows.append({
+            'counts': dict(running_counts),
+            'seed': None,
+        })
         
         # Calculate absolute difference for convergence of all Pauli operators
         convergence_I = abs(effective_current["I"] - effective_new["I"])
@@ -823,10 +852,33 @@ def error_propagation_simulation(
             consecutive_convergence_count = 0  # Reset counter if convergence is not met
         
         # Save progress to same file (append)
-        with open(progress_file, "a") as f:
-            f.write(f"{iteration},{effective_new['I']:.8f},{effective_new['X']:.8f},{effective_new['Y']:.8f},{effective_new['Z']:.8f},{bias},{convergence_I:.2e},{convergence_X:.2e},{convergence_Y:.2e},{convergence_Z:.2e},{convergence:.2e},{consecutive_convergence_count}\n")
+        pending_progress_lines.append(
+            f"{iteration},{effective_new['I']:.8f},{effective_new['X']:.8f},{effective_new['Y']:.8f},{effective_new['Z']:.8f},{bias},{convergence_I:.2e},{convergence_X:.2e},{convergence_Y:.2e},{convergence_Z:.2e},{convergence:.2e},{consecutive_convergence_count}\n"
+        )
+
+        if iteration % save_every == 0:
+            with open(counts_file, "a", encoding="utf-8") as f:
+                for row in pending_counts_rows:
+                    json.dump(row, f)
+                    f.write('\n')
+            pending_counts_rows.clear()
+
+            with open(progress_file, "a", encoding="utf-8") as f:
+                f.writelines(pending_progress_lines)
+            pending_progress_lines.clear()
         
         effective_current = effective_new
+
+    # Flush remaining buffered rows/lines.
+    if pending_counts_rows:
+        with open(counts_file, "a", encoding="utf-8") as f:
+            for row in pending_counts_rows:
+                json.dump(row, f)
+                f.write('\n')
+
+    if pending_progress_lines:
+        with open(progress_file, "a", encoding="utf-8") as f:
+            f.writelines(pending_progress_lines)
 
     print(f"\nConvergence {'achieved' if consecutive_convergence_count >= required_consecutive_iterations else 'not achieved'} "
         f"after {iteration} iterations")
