@@ -4,6 +4,7 @@ from pathlib import Path
 import json
 import sys
 import logging
+import runpy
 import pytest
 import random
 from stim import PauliString
@@ -22,6 +23,7 @@ from pauli_distribution import (  # noqa: E402
 	save_running_counts,
 	apply_gate_error_channel,
 )
+from pauli_distribution import pauli_strings as pauli_strings_module  # noqa: E402
 
 TEST_DATA_DIR = Path(__file__).resolve().parent
 
@@ -116,6 +118,22 @@ def test_4_qubit_XZZX_circuit_initial_Pauli_propagation() -> None:
 			gate_sequence=[("CX", [0, 1]), ("CZ", [0, 2]), ("CZ", [0, 3]), ("CX", [0, 4])],
 			ancilla=[0],
 			qubit_platform="ideal",
+			random_seed=123,
+			initial_pauli_string=P_string,
+		)
+
+		assert samples == error_P
+
+def test_4_qubit_XZZX_circuit_initial_Pauli_propagation_superconducting() -> None:
+	for P_string, error_P in zip(init_Pauli_strings, error_Propagation_lists):
+		samples = get_pauli_string(
+			keep_qubits=[0,1,2,3,4],
+			samples=1,
+			p=0.0,
+			system_bias=10.0,
+			gate_sequence=convert_gate_sequence([("CX", [0, 1]), ("CZ", [0, 2]), ("CZ", [0, 3]), ("CX", [0, 4])], "CNOT_native"),
+			ancilla=[0],
+			qubit_platform="superconducting",
 			random_seed=123,
 			initial_pauli_string=P_string,
 		)
@@ -492,6 +510,120 @@ def test_get_pauli_string_full_path_seed_reproducibility_nonideal() -> None:
 	assert all(v in (0, 1, 2, 3) for v in samples_a)
 
 
+def test_get_pauli_string_coalesced_disjoint_timesteps_avoids_extra_rounds(monkeypatch: pytest.MonkeyPatch) -> None:
+	# Force deterministic sampling: always select the first bucket in apply_error.
+	monkeypatch.setattr(pauli_strings_module.random, "random", lambda: 0.0)
+
+	gate_sequence = [
+		("CX", [0, 1]),
+		("CZ", [2, 3]),
+	]
+
+	non_coalesced = get_pauli_string(
+		keep_qubits=[0, 1, 2, 3, 4, 5, 6, 7],
+		samples=1,
+		p=0.5,
+		system_bias=0.0,
+		gate_sequence=gate_sequence,
+		ancilla=[],
+		qubit_platform="ideal",
+		random_seed=123,
+		coalesce_disjoint_timesteps=False,
+	)
+	coalesced = get_pauli_string(
+		keep_qubits=[0, 1, 2, 3, 4, 5, 6, 7],
+		samples=1,
+		p=0.5,
+		system_bias=0.0,
+		gate_sequence=gate_sequence,
+		ancilla=[],
+		qubit_platform="ideal",
+		random_seed=123,
+		coalesce_disjoint_timesteps=True,
+	)
+
+	# Qubits 4..7 are idle in both listed gates. Without coalescing they receive
+	# two rounds (X*X=I), with coalescing they receive one round (X).
+	assert non_coalesced[4:] == [0, 0, 0, 0]
+	assert coalesced[4:] == [1, 1, 1, 1]
+
+
+def test_get_pauli_string_coalesced_disjoint_timesteps_avoids_extra_rounds_superconducting(
+	monkeypatch: pytest.MonkeyPatch,
+) -> None:
+	# Force deterministic sampling in both idle-noise and gate-channel samplers.
+	# For superconducting CX channel, random=0 picks "II" (identity) so the
+	# assertion isolates idle-noise round counting exactly like the ideal test.
+	monkeypatch.setattr(pauli_strings_module.random, "random", lambda: 0.0)
+
+	gate_sequence = [
+		("CX", [0, 1]),
+		("CX", [2, 3]),
+	]
+
+	non_coalesced = get_pauli_string(
+		keep_qubits=[0, 1, 2, 3, 4, 5, 6, 7],
+		samples=1,
+		p=0.5,
+		system_bias=0.0,
+		gate_sequence=gate_sequence,
+		ancilla=[],
+		qubit_platform="superconducting",
+		random_seed=123,
+		coalesce_disjoint_timesteps=False,
+	)
+	coalesced = get_pauli_string(
+		keep_qubits=[0, 1, 2, 3, 4, 5, 6, 7],
+		samples=1,
+		p=0.5,
+		system_bias=0.0,
+		gate_sequence=gate_sequence,
+		ancilla=[],
+		qubit_platform="superconducting",
+		random_seed=123,
+		coalesce_disjoint_timesteps=True,
+	)
+
+	# Qubits 4..7 are idle in both listed gates. Without coalescing they receive
+	# two rounds (X*X=I), with coalescing they receive one round (X).
+	assert non_coalesced[4:] == [0, 0, 0, 0]
+	assert coalesced[4:] == [1, 1, 1, 1]
+
+
+def test_get_pauli_string_coalescing_preserves_gate_evolution_when_idle_noise_disabled() -> None:
+	# With p=0 there is no stochastic idle-noise insertion, so coalescing should
+	# not change any qubit values; this isolates gate evolution/gate-channel logic.
+	gate_sequence = [
+		("CX", [0, 1]),
+		("CX", [2, 3]),
+	]
+
+	non_coalesced = get_pauli_string(
+		keep_qubits=[0, 1, 2, 3, 4, 5, 6, 7],
+		samples=16,
+		p=0.0,
+		system_bias=10.0,
+		gate_sequence=gate_sequence,
+		ancilla=[],
+		qubit_platform="superconducting",
+		random_seed=123,
+		coalesce_disjoint_timesteps=False,
+	)
+	coalesced = get_pauli_string(
+		keep_qubits=[0, 1, 2, 3, 4, 5, 6, 7],
+		samples=16,
+		p=0.0,
+		system_bias=10.0,
+		gate_sequence=gate_sequence,
+		ancilla=[],
+		qubit_platform="superconducting",
+		random_seed=123,
+		coalesce_disjoint_timesteps=True,
+	)
+
+	assert non_coalesced == coalesced
+
+
 
 
 def test_convert_gate_sequence_cz_native_transforms_cx_and_cy() -> None:
@@ -592,3 +724,5 @@ def test_ideal_platform_skips_hardware_gate_error_channel() -> None:
 	assert all(v == 0 for v in ideal_samples)
 	# Hardware platform can still inject gate-channel noise independently of p.
 	assert any(v != 0 for v in hw_samples)
+
+

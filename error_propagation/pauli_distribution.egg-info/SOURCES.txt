@@ -1,0 +1,9 @@
+README.md
+pyproject.toml
+pauli_distribution/__init__.py
+pauli_distribution/pauli_strings.py
+pauli_distribution.egg-info/PKG-INFO
+pauli_distribution.egg-info/SOURCES.txt
+pauli_distribution.egg-info/dependency_links.txt
+pauli_distribution.egg-info/requires.txt
+pauli_distribution.egg-info/top_level.txt

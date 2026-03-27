@@ -16,7 +16,6 @@ import json
 GateOp = Tuple[str, List[int]]
 
 _SINGLE_QUBIT_ERROR_CHOICES: Tuple[str, ...] = ("I", "X", "Y", "Z")
-_PAULI_ERROR_CHOICES: Tuple[str, ...] = ("X", "Y", "Z", "I")
 _TWO_QUBIT_ERROR_CHOICES: Tuple[str, ...] = (
     "II", "IX", "IY", "IZ",
     "XI", "XX", "XY", "XZ",
@@ -45,6 +44,37 @@ def _sample_from_cumulative(choices: Tuple[str, ...], cumulative_weights: Tuple[
 
 def _ordered_weights(probabilities: Dict[str, float], order: Tuple[str, ...]) -> Tuple[float, ...]:
     return tuple(probabilities[label] for label in order)
+
+
+def _coalesce_disjoint_gate_layers(
+    gate_sequence: List[GateOp],
+    keep_qubits: List[int],
+) -> List[Tuple[List[GateOp], List[int]]]:
+    """Group consecutive disjoint gates into one logical timestep.
+
+    Gates remain in-order within each layer; a new layer starts when the next gate
+    overlaps any qubit already used in the current layer.
+    """
+    layers: List[Tuple[List[GateOp], List[int]]] = []
+    current_ops: List[GateOp] = []
+    current_used: set[int] = set()
+
+    for gate_name, targets in gate_sequence:
+        target_set = set(targets)
+        if current_ops and current_used.intersection(target_set):
+            idle_qubits = [q for q in keep_qubits if q not in current_used]
+            layers.append((current_ops, idle_qubits))
+            current_ops = []
+            current_used = set()
+
+        current_ops.append((gate_name, targets))
+        current_used.update(target_set)
+
+    if current_ops:
+        idle_qubits = [q for q in keep_qubits if q not in current_used]
+        layers.append((current_ops, idle_qubits))
+
+    return layers
 
 
 _SC_CX_PROBS: Dict[str, float] = {
@@ -339,110 +369,36 @@ def apply_gate_error_channel(pauli: PauliString, gate_name: str, targets: List[i
     return pauli
 
 
-def apply_gate_and_idle_error(
+def apply_precomputed_layer_gate_and_idle_error(
         pauli: PauliString,
-        gate_name: str,
-        gate_targets: List[int],
-        idle_qubits: List[int],
         identity: str,
-        qubit_platform: str,
+        idle_qubits: List[int],
         idle_weights: List[float],
+        layer_ops: List[Tuple[List[int], Tuple[Tuple[int, int], ...], Tuple[str, ...], Tuple[float, ...], int]],
 ) -> PauliString:
-    """
-    Applies both gate-channel and idle-qubit errors in one Pauli multiplication.
-
-    This reduces intermediate string/object allocations in the innermost loop.
-    """
-    if qubit_platform == 'ideal':
-        return pauli
-
-    platform_channels = _GATE_ERROR_CHANNELS.get(qubit_platform)
-    if platform_channels is None:
-        raise ValueError(f"Unsupported qubit platform: {qubit_platform}")
-
-    channel = platform_channels.get(gate_name)
-    if channel is None:
-        message = _UNSUPPORTED_GATE_ERROR_MESSAGES.get(qubit_platform)
-        if message is None:
-            raise ValueError(f"Unsupported qubit platform: {qubit_platform}")
-        raise ValueError(message.format(gate_name=gate_name))
-
-    choices, _weights, cumulative, arity = channel
+    """Apply gate-channel noise for an entire disjoint layer plus one idle-noise round."""
     error = list(identity)
     has_non_identity_error = False
+
     idle_x_cutoff = idle_weights[0]
     idle_y_cutoff = idle_x_cutoff + idle_weights[1]
     idle_z_cutoff = idle_y_cutoff + idle_weights[2]
     idle_total = idle_z_cutoff + idle_weights[3]
 
-    if arity == 2:
-        for control, target in pairwise_tuples(gate_targets):
-            error_char = _sample_from_cumulative(choices, cumulative)
-            error[control] = error_char[0]
-            error[target] = error_char[1]
-            if error_char != "II":
-                has_non_identity_error = True
-    else:
-        for target in gate_targets:
-            error_char = _sample_from_cumulative(choices, cumulative)
-            error[target] = error_char
-            if error_char != "I":
-                has_non_identity_error = True
-
-    for qubit in idle_qubits:
-        r = random.random() * idle_total
-        if r < idle_x_cutoff:
-            error_char = "X"
-        elif r < idle_y_cutoff:
-            error_char = "Y"
-        elif r < idle_z_cutoff:
-            error_char = "Z"
+    for gate_targets, two_qubit_pairs, choices, cumulative_weights, arity in layer_ops:
+        if arity == 2:
+            for control, target in two_qubit_pairs:
+                error_char = _sample_from_cumulative(choices, cumulative_weights)
+                error[control] = error_char[0]
+                error[target] = error_char[1]
+                if error_char != "II":
+                    has_non_identity_error = True
         else:
-            error_char = "I"
-        error[qubit] = error_char
-        if error_char != 'I':
-            has_non_identity_error = True
-
-    if not has_non_identity_error:
-        return pauli
-
-    pauli *= PauliString(''.join(error))
-    return pauli
-
-
-def apply_precomputed_gate_and_idle_error(
-        pauli: PauliString,
-        gate_targets: List[int],
-        idle_qubits: List[int],
-        identity: str,
-        idle_weights: List[float],
-        choices: Tuple[str, ...],
-        weights: Tuple[float, ...],
-        cumulative_weights: Tuple[float, ...],
-        arity: int,
-        two_qubit_pairs: Tuple[Tuple[int, int], ...],
-) -> PauliString:
-    """Applies gate-channel and idle-qubit errors using precomputed channel metadata."""
-    error = list(identity)
-    has_non_identity_error = False
-    idle_x_cutoff = idle_weights[0]
-    idle_y_cutoff = idle_x_cutoff + idle_weights[1]
-    idle_z_cutoff = idle_y_cutoff + idle_weights[2]
-    idle_total = idle_z_cutoff + idle_weights[3]
-
-    if arity == 2:
-        for control, target in two_qubit_pairs:
-            error_char = _sample_from_cumulative(choices, cumulative_weights)
-            error[control] = error_char[0]
-            error[target] = error_char[1]
-            if error_char != "II":
-                has_non_identity_error = True
-    else:
-        for target in gate_targets:
-            error_char = _sample_from_cumulative(choices, cumulative_weights)
-            error[target] = error_char
-            if error_char != "I":
-                has_non_identity_error = True
+            for target in gate_targets:
+                error_char = _sample_from_cumulative(choices, cumulative_weights)
+                error[target] = error_char
+                if error_char != "I":
+                    has_non_identity_error = True
 
     for qubit in idle_qubits:
         r = random.random() * idle_total
@@ -565,6 +521,7 @@ def get_pauli_string(
     use_compressed_space: bool = True,
     initial_pauli_string: Optional[str] = None,
     return_counts: bool = False,
+    coalesce_disjoint_timesteps: bool = False,
 ) -> List[int] | Dict[int, int]:
     """
     Generates a flattened list of noisy Pauli values by simulating gate operations and error insertion.
@@ -592,6 +549,11 @@ def get_pauli_string(
         return_counts: If True, return accumulated counts
             ``{0: I_count, 1: X_count, 2: Y_count, 3: Z_count}`` instead of
             a flattened sample list.
+        coalesce_disjoint_timesteps: If True, groups consecutive gates that act
+            on disjoint qubits into a single logical timestep. This applies
+            idle-noise insertion once per grouped layer instead of once per
+            gate entry, preventing over-application when disjoint gates are
+            intended to run in parallel.
 
     Returns:
         If ``return_counts`` is False (default):
@@ -651,30 +613,36 @@ def get_pauli_string(
     initial_state = identity if initial_pauli_string is None else initial_pauli_string
     effective_gate_sequence = compressed_gate_sequence
     effective_keep_qubits = compressed_keep_qubits
-    gate_steps: List[Tuple[str, List[int], List[int]]] = []
-    precomputed_channels: List[Tuple[Tuple[str, ...], Tuple[float, ...], Tuple[float, ...], int, Tuple[Tuple[int, int], ...]]] = []
+    gate_layers: List[Tuple[List[GateOp], List[int]]] = (
+        _coalesce_disjoint_gate_layers(effective_gate_sequence, effective_keep_qubits)
+        if coalesce_disjoint_timesteps
+        else [
+            ([(gate_name, gate_targets)], [q for q in effective_keep_qubits if q not in set(gate_targets)])
+            for gate_name, gate_targets in effective_gate_sequence
+        ]
+    )
+    precomputed_layers: List[List[Tuple[List[int], Tuple[Tuple[int, int], ...], Tuple[str, ...], Tuple[float, ...], int]]] = []
     platform_channels = None
     if qubit_platform != 'ideal':
         platform_channels = _GATE_ERROR_CHANNELS.get(qubit_platform)
         if platform_channels is None:
             raise ValueError(f"Unsupported qubit platform: {qubit_platform}")
 
-    for gate_name, gate_targets in effective_gate_sequence:
-        gate_target_set = set(gate_targets)
-        idle_qubits = [q for q in effective_keep_qubits if q not in gate_target_set]
-        gate_steps.append((gate_name, gate_targets, idle_qubits))
-
+    for layer_ops, _idle_qubits in gate_layers:
+        layer_meta: List[Tuple[List[int], Tuple[Tuple[int, int], ...], Tuple[str, ...], Tuple[float, ...], int]] = []
         if platform_channels is not None:
-            channel = platform_channels.get(gate_name)
-            if channel is None:
-                message = _UNSUPPORTED_GATE_ERROR_MESSAGES.get(qubit_platform)
-                if message is None:
-                    raise ValueError(f"Unsupported qubit platform: {qubit_platform}")
-                raise ValueError(message.format(gate_name=gate_name))
+            for gate_name, gate_targets in layer_ops:
+                channel = platform_channels.get(gate_name)
+                if channel is None:
+                    message = _UNSUPPORTED_GATE_ERROR_MESSAGES.get(qubit_platform)
+                    if message is None:
+                        raise ValueError(f"Unsupported qubit platform: {qubit_platform}")
+                    raise ValueError(message.format(gate_name=gate_name))
 
-            choices, gate_weights, gate_cumulative_weights, arity = channel
-            two_qubit_pairs: Tuple[Tuple[int, int], ...] = tuple(pairwise_tuples(gate_targets)) if arity == 2 else ()
-            precomputed_channels.append((choices, gate_weights, gate_cumulative_weights, arity, two_qubit_pairs))
+                choices, _gate_weights, gate_cumulative_weights, arity = channel
+                two_qubit_pairs: Tuple[Tuple[int, int], ...] = tuple(pairwise_tuples(gate_targets)) if arity == 2 else ()
+                layer_meta.append((gate_targets, two_qubit_pairs, choices, gate_cumulative_weights, arity))
+        precomputed_layers.append(layer_meta)
     # For manipulations with only ancillas
     #effective_ancilla = compressed_ancilla
     # Interval [0,1]. X ->[0,px) Y -> [px,px+py) Z -> [px+py,p) I -> [p, 1 - p] p =px + py + pz
@@ -696,21 +664,15 @@ def get_pauli_string(
             # INIT error
             pauli = apply_error(pauli, identity, effective_keep_qubits, weights_init_meas) # init error |+> -> |->
             # Circuit
-            for (gate_name, gate_targets, idle_qubits), (choices, gate_weights, gate_cumulative_weights, arity, two_qubit_pairs) in zip(gate_steps, precomputed_channels):
-                # Gate operation under conjugation
-                pauli = gate_operation(pauli, gate_name, gate_targets, TABLEAUS=TABLEAU_CACHE)
-                # Apply precomputed gate channel and idle errors with no per-step metadata lookup.
-                pauli = apply_precomputed_gate_and_idle_error(
+            for (layer_ops, idle_qubits), layer_meta in zip(gate_layers, precomputed_layers):
+                for gate_name, gate_targets in layer_ops:
+                    pauli = gate_operation(pauli, gate_name, gate_targets, TABLEAUS=TABLEAU_CACHE)
+                pauli = apply_precomputed_layer_gate_and_idle_error(
                     pauli,
-                    gate_targets,
-                    idle_qubits,
                     identity,
+                    idle_qubits,
                     weights,
-                    choices,
-                    gate_weights,
-                    gate_cumulative_weights,
-                    arity,
-                    two_qubit_pairs,
+                    layer_meta,
                 )
 
             # ERROR BEFORE MEASUREMENT
@@ -727,8 +689,9 @@ def get_pauli_string(
             pauli = PauliString(initial_state)
             # INIT error
             pauli = apply_error(pauli, identity, effective_keep_qubits, weights_init_meas)
-            for gate_name, gate_targets, _idle_qubits in gate_steps:
-                pauli = gate_operation(pauli, gate_name, gate_targets, TABLEAUS=TABLEAU_CACHE)
+            for layer_ops, _idle_qubits in gate_layers:
+                for gate_name, gate_targets in layer_ops:
+                    pauli = gate_operation(pauli, gate_name, gate_targets, TABLEAUS=TABLEAU_CACHE)
                 pauli = apply_error(pauli, identity, effective_keep_qubits, weights)
             # ERROR BEFORE MEASUREMENT
             pauli = apply_error(pauli, identity, effective_keep_qubits, weights_init_meas)
@@ -820,6 +783,7 @@ def error_propagation_simulation(
     samples_per_iteration: int,total_samples: int, chosen_seed: int,
     timestamp: str,
     save_every: int = 1,
+    coalesce_disjoint_timesteps: bool = True,
     ) -> Tuple[str,str]: 
     """
     Run iterative Pauli-error propagation simulation until convergence or sample cap.
@@ -843,6 +807,9 @@ def error_propagation_simulation(
         timestamp: Suffix used in output filenames.
         save_every: Number of iterations to buffer before appending progress
             and counts to disk. Use 1 to preserve per-iteration writes.
+        coalesce_disjoint_timesteps: If True, groups consecutive disjoint gates
+            into one logical timestep when sampling, applying idle noise once
+            per layer.
 
     Returns:
         Tuple of (progress_file, counts_file) output paths.
@@ -872,6 +839,7 @@ def error_propagation_simulation(
         ancilla=ancilla,
         random_seed=chosen_seed,
         return_counts=True,
+        coalesce_disjoint_timesteps=coalesce_disjoint_timesteps,
     )
     initial_counts = cast(Dict[int, int], initial_counts_raw)
 
@@ -923,6 +891,7 @@ def error_propagation_simulation(
                 ancilla=ancilla,
             random_seed=None,
             return_counts=True,
+            coalesce_disjoint_timesteps=coalesce_disjoint_timesteps,
         )
         new_counts = cast(Dict[int, int], new_counts_raw)
         generated_samples += current_batch_samples

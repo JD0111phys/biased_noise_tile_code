@@ -122,7 +122,8 @@ platform = "superconducting"
 bias_sys = 10000.0
 prob = 0.003
 samples_per_iteration = 10000  # Increased for better convergence
-total_samples = 2_000_000  # Set a maximum total sample limit for safety
+total_samples = 10000  # test
+#total_samples = 2_000_000  # Set a maximum total sample limit for safety
 
 
 # Create new directory for all output files
