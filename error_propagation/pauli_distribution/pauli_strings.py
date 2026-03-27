@@ -811,46 +811,6 @@ def load_running_counts(input_file: str) -> Dict[int, int]:
         pass  # Return initialized counts if file doesn't exist
     return running_counts
 
-def update_running_counts(
-    running_counts: Dict[int, int], 
-    new_pauli_values: List[int]
-) -> Dict[int, int]:
-    """
-    Update running counts in place with new samples.
-    
-    Args:
-        running_counts: Current counts for each Pauli type {0: I_count, 1: X_count, ...}.
-        new_pauli_values: Flattened list of new Pauli values (0=I, 1=X, 2=Y, 3=Z).
-        
-    Returns:
-        The same running_counts dictionary after in-place update.
-    """
-    # Avoid Counter allocation overhead in tight callers.
-    for value in new_pauli_values:
-        running_counts[int(value)] += 1
-    
-    return running_counts
-
-#----------------- CALCULATE EFFECTIVE PROBABILITIES -----------------#
-
-def effective_pauli_probabilities_from_counts(
-    running_counts: Dict[int, int]
-) -> Dict[str, float]:
-    """
-    Calculates effective probabilities from precomputed running counts.
-    
-    Args:
-        running_counts: Dictionary with counts {0: I_count, 1: X_count, 2: Y_count, 3: Z_count}.
-            Missing keys are treated as zero.
-        
-    Returns:
-        Dictionary with fixed keys 'I', 'X', 'Y', 'Z' mapped to their effective
-        probabilities. If total count is zero, all returned probabilities are 0.0.
-    """
-    total = sum(running_counts.values())
-    pauli_map = {0: 'I', 1: 'X', 2: 'Y', 3: 'Z'}
-    return {pauli_map[k]: running_counts.get(k, 0) / total if total > 0 else 0.0 for k in pauli_map}
-
 #----------------- MAIN SIMULATION FUNCTION WITH CONVERGENCE CHECK -----------------#
 
 def error_propagation_simulation(

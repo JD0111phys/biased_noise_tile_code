@@ -16,12 +16,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pauli_distribution import (  # noqa: E402
 	convert_gate_sequence,
-	effective_pauli_probabilities_from_counts,
 	error_propagation_simulation,
 	get_pauli_string,
 	load_running_counts,
 	save_running_counts,
-	update_running_counts,
 	apply_gate_error_channel,
 )
 
@@ -404,9 +402,15 @@ def test_hadamard_error_channel() -> None:
 		pauli = apply_gate_error_channel(pauli, gate[0], gate[1], identity, "superconducting")
 		results.extend(list(pauli))
 	running_counts = {0: 0, 1: 0, 2: 0, 3: 0}  # I, X, Y, Z
-    # Update running counts with initial samples
-	running_counts = update_running_counts(running_counts, results)
-	effective_probs = effective_pauli_probabilities_from_counts(running_counts)
+	for value in results:
+		running_counts[int(value)] += 1
+	total = sum(running_counts.values())
+	effective_probs = {
+		"I": running_counts[0] / total,
+		"X": running_counts[1] / total,
+		"Y": running_counts[2] / total,
+		"Z": running_counts[3] / total,
+	}
 	logger.info("Hadamard gate effective Pauli probabilities: %s", effective_probs)
 
 	err_dict_hadamard = {'I': 0.9970831318064503,
@@ -426,9 +430,15 @@ def test_s_gate_error_channel() -> None:
 		pauli = apply_gate_error_channel(pauli, gate[0], gate[1], identity, "superconducting")
 		results.extend(list(pauli))
 	running_counts = {0: 0, 1: 0, 2: 0, 3: 0}  # I, X, Y, Z
-    # Update running counts with initial samples
-	running_counts = update_running_counts(running_counts, results)
-	effective_probs = effective_pauli_probabilities_from_counts(running_counts)
+	for value in results:
+		running_counts[int(value)] += 1
+	total = sum(running_counts.values())
+	effective_probs = {
+		"I": running_counts[0] / total,
+		"X": running_counts[1] / total,
+		"Y": running_counts[2] / total,
+		"Z": running_counts[3] / total,
+	}
 	logger.info("S gate effective Pauli probabilities: %s", effective_probs)
 
 	err_dict_s = {'I': 0.9970240579376571,
@@ -497,19 +507,6 @@ def test_convert_gate_sequence_cz_native_transforms_cx_and_cy() -> None:
 	assert out[6] == ("H", [5])
 	assert out[7] == ("S_DAG", [5])
 	assert out[8] == ("H", [6])
-
-
-def test_update_running_counts_updates_in_place() -> None:
-	running = {0: 1, 1: 2, 2: 3, 3: 4}
-	out = update_running_counts(running, [0, 0, 2, 3, 3, 3])
-
-	assert out is running
-	assert running == {0: 3, 1: 2, 2: 4, 3: 7}
-
-
-def test_effective_probabilities_handles_empty_counts() -> None:
-	probs = effective_pauli_probabilities_from_counts({})
-	assert probs == {"I": 0.0, "X": 0.0, "Y": 0.0, "Z": 0.0}
 
 
 def test_save_load_running_counts_handles_jsonl_and_malformed_lines(tmp_path: Path) -> None:
