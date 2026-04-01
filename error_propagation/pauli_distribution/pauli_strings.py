@@ -9,9 +9,9 @@
 #- run iterative simulations until convergence.
 
 import random
-from stim import PauliString, Tableau  # type: ignore
 from typing import List, Tuple, Dict, Optional, Any, cast
 import json
+from stim import PauliString, Tableau  # type: ignore
 
 GateOp = Tuple[str, List[int]]
 
@@ -174,10 +174,9 @@ def _get_platform_channels(qubit_platform: str) -> Optional[GateErrorChannelType
     if platform_channels is None:
         raise ValueError(f"Unsupported qubit platform: {qubit_platform}")
     return platform_channels
-
-#----------------- APPLY ERROR FUNCTIONS -----------------#
-
-
+#########################################################################################################
+#########################################################################################################
+#---------------------------------------- APPLY ERROR FUNCTIONS ----------------------------------------#
 def apply_error(
         pauli: PauliString,
         identity: str,
@@ -228,7 +227,7 @@ def apply_error(
     # Updating pauli string
     pauli *= PauliString(error_str)
     return pauli
-
+##################################################################################
 def pairwise_tuples(lst: List[int]) -> List[Tuple[int, int]]:
     """
     Groups a flat list of integers into consecutive (control, target) pairs.
@@ -246,7 +245,7 @@ def pairwise_tuples(lst: List[int]) -> List[Tuple[int, int]]:
     if len(lst) % 2 != 0:
         raise ValueError("List must contain an even number of elements.")
     return [(lst[i], lst[i+1]) for i in range(0, len(lst), 2)]
-
+#########################################################################################
 def apply_gate_error_channel(
     pauli: PauliString,
     gate_name: str,
@@ -319,8 +318,7 @@ def apply_gate_error_channel(
 
     pauli *= PauliString(''.join(error))
     return pauli
-
-
+##########################################################################################
 def apply_precomputed_layer_gate_and_idle_error(
     pauli: PauliString,
     identity: str,
@@ -385,8 +383,9 @@ def apply_precomputed_layer_gate_and_idle_error(
 
     pauli *= PauliString(''.join(error))
     return pauli
-
-#----------------- GATE FUNCTIONS -----------------#
+##########################################################################################################
+##########################################################################################################
+#---------------------------------------- GATE FUNCTIONS ------------------------------------------------#
 
 def convert_gate_sequence(gate_sequence: List[GateOp], conversion_type: str) -> List[GateOp]:
     """
@@ -411,7 +410,6 @@ def convert_gate_sequence(gate_sequence: List[GateOp], conversion_type: str) -> 
         as gate_sequence, containing the decomposed gate operations.
     """
     converted_sequence: List[GateOp] = []
-    
     for gate_type, qubits in gate_sequence:
         if conversion_type == "CZ_native" and gate_type == "CX":
             # Convert CX to H CZ H, with H on odd entries
@@ -428,7 +426,7 @@ def convert_gate_sequence(gate_sequence: List[GateOp], conversion_type: str) -> 
             converted_sequence.append(("H", odd_qubits))
             converted_sequence.append(("S_DAG", odd_qubits))
         elif conversion_type == "CNOT_native" and gate_type == "CZ":
-            # Convert CZ to H CX H, with H on odd entries  
+            # Convert CZ to H CX H, with H on odd entries
             odd_qubits = [qubits[i] for i in range(1, len(qubits), 2)]
             converted_sequence.append(("H", odd_qubits))
             converted_sequence.append(("CX", qubits))
@@ -442,7 +440,6 @@ def convert_gate_sequence(gate_sequence: List[GateOp], conversion_type: str) -> 
         else:
             # Keep the gate as is
             converted_sequence.append((gate_type, qubits))
-    
     return converted_sequence
 
 def gate_operation(
@@ -472,37 +469,33 @@ def gate_operation(
         KeyError: If gate_name is not a key in TABLEAUS.
     """
     return pauli.after(TABLEAUS[gate_name], targets=targets)
-
+###################################################################################
+###################################################################################
 #----------------- FUNCTION TO GET SAMPLES OF PAULI STRINGS -----------------#
 
 def get_pauli_string(
-        keep_qubits: List[int],
-        samples: int = 100,
-        p: float = 0.003,
-        system_bias: float = 1000.0,
     gate_sequence: Optional[List[GateOp]] = None,
-        ancilla: Optional[List[int]] = None,
-        qubit_platform: str = "superconducting",
-        random_seed: Optional[int] = None,
+    samples: int = 100,
+    p: float = 0.003,
+    system_bias: float = 1000.0,
+    qubit_platform: str = "superconducting",
+    random_seed: Optional[int] = None,
     initial_pauli_string: Optional[str] = None,
-    return_counts: bool = False,
-    coalesce_disjoint_timesteps: bool = False,
-) -> List[int] | Dict[int, int]:
+) -> Dict[int, int]:
     """
-    Generates a flattened list of noisy Pauli values by simulating gate operations and error insertion.
+    Generates cumulative Pauli error counts by simulating gate operations and error insertion.
 
     Args:
-        keep_qubits: List of qubit indices to keep in the output (including ancilla).
+        gate_sequence: List of gates to apply, each as (gate_name, [targets]).
+            For two-qubit gates, targets must be a flat list of control-target
+            pairs: [ctrl0, tgt0, ctrl1, tgt1, ...].
+            All qubits (data and ancilla) are derived from this sequence.
         samples: Number of Pauli string samples to generate.
         p: Total single-qubit error probability, split as
             px = py = p / (2 + system_bias) and
             pz = p * system_bias / (2 + system_bias).
         system_bias: Dephasing bias parameter controlling the relative weight of
             Z errors against X/Y errors.
-        gate_sequence: List of gates to apply, each as (gate_name, [targets]).
-            For two-qubit gates, targets must be a flat list of control-target
-            pairs: [ctrl0, tgt0, ctrl1, tgt1, ...].
-        ancilla: List of ancilla qubit indices used for measurement errors.
         qubit_platform: The platform type of the qubits (e.g., "superconducting", "neutral_atom").
             "ideal" means no hardware-specific gate error channel is applied
             (native gate compilation), but generic stochastic error insertion
@@ -510,30 +503,17 @@ def get_pauli_string(
         random_seed: Random seed for reproducible error generation (optional).
         initial_pauli_string: Optional initial Pauli string in compressed qubit space.
             If not provided, starts from identity on all compressed qubits.
-        return_counts: If True, return accumulated counts
-            ``{0: I_count, 1: X_count, 2: Y_count, 3: Z_count}`` instead of
-            a flattened sample list.
-        coalesce_disjoint_timesteps: If True, groups consecutive gates that act
-            on disjoint qubits into a single logical timestep. This applies
-            idle-noise insertion once per grouped layer instead of once per
-            gate entry, preventing over-application when disjoint gates are
-            intended to run in parallel.
 
     Returns:
-        If ``return_counts`` is False (default):
-        a flattened list of Pauli values (0=I, 1=X, 2=Y, 3=Z) with length
-        ``samples * len(sorted(set(keep_qubits) | set(ancilla)))``.
-
-        If ``return_counts`` is True:
-        cumulative counts ``{0: I_count, 1: X_count, 2: Y_count, 3: Z_count}``.
+        Accumulated counts ``{0: I_count, 1: X_count, 2: Y_count, 3: Z_count}``.
+        Consecutive disjoint gates are automatically grouped into single logical
+        timesteps to prevent over-application of idle-noise.
 
     Raises:
         ValueError: If samples is negative, p is outside [0, 1], or system_bias is negative.
     """
     if gate_sequence is None:
         gate_sequence = []
-    if ancilla is None:
-        ancilla = []
 
     if samples < 0:
         raise ValueError("samples must be non-negative.")
@@ -542,19 +522,25 @@ def get_pauli_string(
     if system_bias < 0.0:
         raise ValueError("system_bias must be non-negative.")
 
+    # Extract all used qubits from gate sequence
+    all_used_qubits_set: set[int] = set()
+    for gate_name, targets in gate_sequence:
+        all_used_qubits_set.update(targets)
+    all_used_qubits = sorted(all_used_qubits_set)
+    keep_qubits = all_used_qubits  # All qubits extracted from gate sequence
+
     # Set random seed if provided for reproducible results
     if random_seed is not None:
         random.seed(random_seed)
 
-    # Use compressed qubit space for massive speedup
-    all_used_qubits = sorted(set(keep_qubits) | set(ancilla))
-    compressed_size = len(all_used_qubits)
+    # number of qubits in the compressed space (only those involved in gates)
+    compressed_size = len(keep_qubits)
     # Create mapping: original_qubit_idx -> compressed_idx
+    # if there is no compresssion, this will just be an identity mapping
     qubit_to_compressed = {
         original: compressed
-        for compressed, original in enumerate(all_used_qubits)
+        for compressed, original in enumerate(keep_qubits)
     }
-    
     # Compress gate sequences
     compressed_gate_sequence: List[GateOp] = []
     for gate_name, targets in gate_sequence:
@@ -565,53 +551,39 @@ def get_pauli_string(
         ]
         # Only add if targets exist in compressed space
         if compressed_targets:
-            compressed_gate_sequence.append((gate_name, compressed_targets))
-    
+            compressed_gate_sequence.append((gate_name, compressed_targets))    
     # Compress qubit lists
     compressed_keep_qubits = [
         qubit_to_compressed[q]
         for q in keep_qubits
         if q in qubit_to_compressed
     ]
-    #compressed_ancilla = [qubit_to_compressed[q] for q in ancilla if q in qubit_to_compressed]
-
+    # Validate initial_pauli_string length if provided
     if initial_pauli_string is not None and len(initial_pauli_string) != compressed_size:
         raise ValueError(
             "initial_pauli_string length must match compressed qubit count "
             f"({compressed_size})."
         )
-    
     identity = "_" * compressed_size
     initial_state = (
         identity
         if initial_pauli_string is None
         else initial_pauli_string
     )
+    # legacy variable names for clarity in the Monte Carlo sampling section below
     effective_gate_sequence = compressed_gate_sequence
     effective_keep_qubits = compressed_keep_qubits
+    # Always coalesce disjoint gates into layers
     gate_layers: List[Tuple[List[GateOp], List[int]]] = (
         _coalesce_disjoint_gate_layers(
             effective_gate_sequence,
             effective_keep_qubits,
         )
-        if coalesce_disjoint_timesteps
-        else [
-            (
-                [(gate_name, gate_targets)],
-                [
-                    q
-                    for q in effective_keep_qubits
-                    if q not in set(gate_targets)
-                ],
-            )
-            for gate_name, gate_targets in effective_gate_sequence
-        ]
     )
     # Precompute metadata for each layer
     precomputed_layers: List[List[PrecomputedLayerItemType]] = []
     platform_channels = _get_platform_channels(qubit_platform)
-
-    for layer_ops, _idle_qubits in gate_layers:
+    for layer_ops, _ in gate_layers:
         layer_meta: List[PrecomputedLayerItemType] = []
         if platform_channels is not None:
             for gate_name, gate_targets in layer_ops:
@@ -651,7 +623,8 @@ def get_pauli_string(
         name: Tableau.from_named_gate(name)
         for name, _ in effective_gate_sequence
     }
-    flattened_result: List[int] = []
+    ############# MONTE CARLO SAMPLING #################
+    # initialize counts
     x_count = 0
     y_count = 0
     z_count = 0
@@ -695,17 +668,14 @@ def get_pauli_string(
                 weights_init_meas,
             )
 
-            if return_counts:
-                for value in pauli:
-                    pauli_value = int(value)
-                    if pauli_value == 1:
-                        x_count += 1
-                    elif pauli_value == 2:
-                        y_count += 1
-                    elif pauli_value == 3:
-                        z_count += 1
-            else:
-                flattened_result.extend(list(pauli)) # type: ignore
+            for value in pauli:
+                pauli_value = int(value)
+                if pauli_value == 1:
+                    x_count += 1
+                elif pauli_value == 2:
+                    y_count += 1
+                elif pauli_value == 3:
+                    z_count += 1
     else:
         # Ideal compilation path: skip hardware-specific gate error channel.
         for _ in range(samples):
@@ -717,7 +687,7 @@ def get_pauli_string(
                 effective_keep_qubits,
                 weights_init_meas,
             )
-            for layer_ops, _idle_qubits in gate_layers:
+            for layer_ops, _ in gate_layers:
                 for gate_name, gate_targets in layer_ops:
                     pauli = gate_operation(
                         pauli,
@@ -739,25 +709,20 @@ def get_pauli_string(
                 weights_init_meas,
             )
 
-            if return_counts:
-                for value in pauli:
-                    pauli_value = int(value)
-                    if pauli_value == 1:
-                        x_count += 1
-                    elif pauli_value == 2:
-                        y_count += 1
-                    elif pauli_value == 3:
-                        z_count += 1
-            else:
-                flattened_result.extend(list(pauli))  # type: ignore
-
-    if return_counts:
-        total_observations = samples * compressed_size
-        identity_count = (
-            total_observations - (x_count + y_count + z_count)
-        )
-        return {0: identity_count, 1: x_count, 2: y_count, 3: z_count}
-    return flattened_result
+            for value in pauli:
+                pauli_value = int(value)
+                if pauli_value == 1:
+                    x_count += 1
+                elif pauli_value == 2:
+                    y_count += 1
+                elif pauli_value == 3:
+                    z_count += 1
+    # Calculate identity count based on total observations and error counts
+    total_observations = samples * compressed_size
+    identity_count = (
+        total_observations - (x_count + y_count + z_count)
+    )
+    return {0: identity_count, 1: x_count, 2: y_count, 3: z_count}
 
 #----------------- STORING DATA FUNCTIONS -----------------#
 
@@ -783,7 +748,7 @@ def save_running_counts(
     data: Dict[str, Any] = {
         'counts': running_counts,
         'seed': seed
-    } 
+    }
     with open(output_file, mode, encoding='utf-8') as f:
         json.dump(data, f)
         f.write('\n')
@@ -867,24 +832,21 @@ def _resolve_convergence_metric(
 #----------------- MAIN SIMULATION FUNCTION WITH CONVERGENCE CHECK -----------------#
 
 def error_propagation_simulation(
-    keep_qubits: List[int],
-    ancilla: List[int],
+    gate_sequence: List[GateOp],
     p_param: float,
     system_bias: float,
     qubit_platform: str,
-    gate_sequence: List[GateOp],
     samples_per_iteration: int,
     total_samples: int,
     chosen_seed: int,
     timestamp: str,
     save_every: int = 1,
-    coalesce_disjoint_timesteps: bool = True,
     resume_counts_file: Optional[str] = None,
     resume_progress_file: Optional[str] = None,
     convergence_mode: str = "bias",
     convergence_threshold: float = 1e-07,
     required_consecutive_iterations: int = 30,
-) -> Tuple[str, str]: 
+) -> Tuple[str, str]:
     """
     Run iterative Pauli-error propagation simulation until convergence or sample cap.
 
@@ -893,12 +855,11 @@ def error_propagation_simulation(
     effective X/Y/Z probabilities.
 
     Args:
-        keep_qubits: Qubit indices included in the sampled output.
-        ancilla: Ancilla qubit indices for measurement-error insertion.
+        gate_sequence: Circuit gate sequence as (gate_name, targets) tuples.
+            All qubits (data and ancilla) are derived from this sequence.
         p_param: Total single-qubit error probability.
         system_bias: Dephasing bias parameter used to split p_param into X/Y/Z components.
         qubit_platform: Hardware platform noise model identifier.
-        gate_sequence: Circuit gate sequence as (gate_name, targets) tuples.
         samples_per_iteration: Number of samples generated per iteration.
         total_samples: Maximum total sample budget used to compute max iterations.
         chosen_seed: Optional initial random seed used to initialize sampling.
@@ -908,9 +869,6 @@ def error_propagation_simulation(
         timestamp: Suffix used in output filenames.
         save_every: Number of iterations to buffer before appending progress
             and counts to disk. Use 1 to preserve per-iteration writes.
-        coalesce_disjoint_timesteps: If True, groups consecutive disjoint gates
-            into one logical timestep when sampling, applying idle noise once
-            per layer.
         resume_counts_file: Optional path to an existing running-counts JSONL
             file. If provided, counts are loaded and simulation continues from
             those accumulated statistics instead of starting from zero.
@@ -954,9 +912,15 @@ def error_propagation_simulation(
             f"Got: {convergence_mode}"
         )
 
-    output_qubit_count = len(sorted(set(keep_qubits) | set(ancilla)))
+    # Extract all used qubits from gate sequence
+    all_used_qubits_set: set[int] = set()
+    for _gate_name, targets in gate_sequence:
+        all_used_qubits_set.update(targets)
+    all_used_qubits = sorted(all_used_qubits_set)
+    output_qubit_count = len(all_used_qubits)
+
     if output_qubit_count <= 0:
-        raise ValueError("At least one output qubit is required to run simulation.")
+        raise ValueError("At least one qubit in gate_sequence is required.")
 
     is_resuming = (resume_counts_file is not None) or (resume_progress_file is not None)
 
@@ -1017,19 +981,14 @@ def error_propagation_simulation(
         generated_samples = loaded_total // output_qubit_count
     else:
         initial_samples = min(samples_per_iteration, total_samples)
-        initial_counts_raw = get_pauli_string(
+        initial_counts = get_pauli_string(
+            gate_sequence=gate_sequence,
             samples=initial_samples,
-            keep_qubits=keep_qubits,
             p=p_param,
             system_bias=system_bias,
             qubit_platform=qubit_platform,
-            gate_sequence=gate_sequence,
-            ancilla=ancilla,
             random_seed=chosen_seed,
-            return_counts=True,
-            coalesce_disjoint_timesteps=coalesce_disjoint_timesteps,
         )
-        initial_counts = cast(Dict[int, int], initial_counts_raw)
         running_counts = {
             0: initial_counts.get(0, 0),
             1: initial_counts.get(1, 0),
@@ -1100,26 +1059,20 @@ def error_propagation_simulation(
     consecutive_convergence_count = 0
     pending_counts_rows: List[Dict[str, Any]] = []
     pending_progress_lines: List[str] = []
-
+##################### start of while loop ###################################
     while consecutive_convergence_count < required_consecutive_iterations and generated_samples < total_samples:
         iteration += 1
         current_batch_samples = min(samples_per_iteration, total_samples - generated_samples)
 
-        new_counts_raw = get_pauli_string(
-                samples=current_batch_samples,
-                keep_qubits=keep_qubits,
-                p=p_param,
-                system_bias=system_bias,
-                qubit_platform=qubit_platform,
-                gate_sequence=gate_sequence,
-                ancilla=ancilla,
+        new_counts = get_pauli_string(
+            gate_sequence=gate_sequence,
+            samples=current_batch_samples,
+            p=p_param,
+            system_bias=system_bias,
+            qubit_platform=qubit_platform,
             random_seed=None,
-            return_counts=True,
-            coalesce_disjoint_timesteps=coalesce_disjoint_timesteps,
         )
-        new_counts = cast(Dict[int, int], new_counts_raw)
-        generated_samples += current_batch_samples
-        
+        generated_samples += current_batch_samples       
         # Update running counts from per-batch counts (avoids flattened list materialization).
         for pauli_type in [0, 1, 2, 3]:
             running_counts[pauli_type] += new_counts.get(pauli_type, 0)
@@ -1130,14 +1083,12 @@ def error_propagation_simulation(
             new_y_prob = running_counts[2] / total
             new_z_prob = running_counts[3] / total
         else:
-            new_i_prob = new_x_prob = new_y_prob = new_z_prob = 0.0
-        
+            new_i_prob = new_x_prob = new_y_prob = new_z_prob = 0.0       
         # Save updated running counts
         pending_counts_rows.append({
             'counts': dict(running_counts),
             'seed': None,
-        })
-        
+        })       
         # Calculate only the convergence components needed by selected mode.
         convergence_I = float('nan')
         convergence_X = float('nan')
@@ -1149,30 +1100,26 @@ def error_propagation_simulation(
             convergence_I = abs(i_prob - new_i_prob)
             convergence_X = abs(x_prob - new_x_prob)
             convergence_Y = abs(y_prob - new_y_prob)
-            convergence_Z = abs(z_prob - new_z_prob)
-        
+            convergence_Z = abs(z_prob - new_z_prob)        
         denominator = new_x_prob + new_y_prob
         bias = new_z_prob / denominator if denominator != 0 else float('inf')
         if normalized_convergence_mode in {"bias", "combined"}:
             if previous_bias == float('inf') and bias == float('inf'):
                 convergence_bias = 0.0
             else:
-                convergence_bias = abs(previous_bias - bias)
-        
+                convergence_bias = abs(previous_bias - bias)       
         convergence = _resolve_convergence_metric(
             normalized_convergence_mode,
             convergence_X,
             convergence_Y,
             convergence_Z,
             convergence_bias,
-        )
-        
+        )        
         # Check convergence criteria and update consecutive count
         if convergence < convergence_threshold:
             consecutive_convergence_count += 1
         else:
-            consecutive_convergence_count = 0  # Reset counter if convergence is not met
-        
+            consecutive_convergence_count = 0  # Reset counter if convergence is not met        
         # Save progress to same file (append)
         pending_progress_lines.append(
             f"{iteration},{new_i_prob:.8f},{new_x_prob:.8f},{new_y_prob:.8f},{new_z_prob:.8f},{bias},{convergence_I:.2e},{convergence_X:.2e},{convergence_Y:.2e},{convergence_Z:.2e},{convergence:.2e},{consecutive_convergence_count},{generated_samples}\n"
@@ -1187,8 +1134,7 @@ def error_propagation_simulation(
 
             with open(progress_file, "a", encoding="utf-8") as f:
                 f.writelines(pending_progress_lines)
-            pending_progress_lines.clear()
-        
+            pending_progress_lines.clear()        
         i_prob = new_i_prob
         x_prob = new_x_prob
         y_prob = new_y_prob
