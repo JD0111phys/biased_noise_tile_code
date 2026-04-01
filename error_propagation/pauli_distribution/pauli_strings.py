@@ -11,6 +11,7 @@
 import random
 from typing import List, Tuple, Dict, Optional, Any, cast
 import json
+import bisect
 from stim import PauliString, Tableau  # type: ignore
 
 GateOp = Tuple[str, List[int]]
@@ -40,38 +41,6 @@ def _sample_from_cumulative(choices: Tuple[str, ...], cumulative_weights: Tuple[
         if r < cutoff:
             return choice
     return choices[-1]
-
-
-def _coalesce_disjoint_gate_layers(
-    gate_sequence: List[GateOp],
-    keep_qubits: List[int],
-) -> List[Tuple[List[GateOp], List[int]]]:
-    """Group consecutive disjoint gates into one logical timestep.
-
-    Gates remain in-order within each layer; a new layer starts when the next gate
-    overlaps any qubit already used in the current layer.
-    """
-    layers: List[Tuple[List[GateOp], List[int]]] = []
-    current_ops: List[GateOp] = []
-    current_used: set[int] = set()
-
-    for gate_name, targets in gate_sequence:
-        target_set = set(targets)
-        if current_ops and current_used.intersection(target_set):
-            idle_qubits = [q for q in keep_qubits if q not in current_used]
-            layers.append((current_ops, idle_qubits))
-            current_ops = []
-            current_used = set()
-
-        current_ops.append((gate_name, targets))
-        current_used.update(target_set)
-
-    if current_ops:
-        idle_qubits = [q for q in keep_qubits if q not in current_used]
-        layers.append((current_ops, idle_qubits))
-
-    return layers
-
 
 # Precompute cumulative weights for single-qubit gates (shared across all platforms).
 _H_WEIGHTS: Tuple[float, ...] = (
@@ -201,21 +170,22 @@ def apply_error(
 
     error = list(identity)
     has_non_identity_error = False
-    x_cutoff = weights_applied[0]
-    y_cutoff = x_cutoff + weights_applied[1]
-    z_cutoff = y_cutoff + weights_applied[2]
-    total = z_cutoff + weights_applied[3]
+    # Precompute cumulative weights for bisect lookup (faster than chained if-elif)
+    cumulative_weights = (
+        weights_applied[0],
+        weights_applied[0] + weights_applied[1],
+        weights_applied[0] + weights_applied[1] + weights_applied[2],
+    )
+    total = cumulative_weights[2] + weights_applied[3]
+    pauli_choices = ("X", "Y", "Z", "I")
+    
     # Applying Error probability to every qubit in pauli string
     for j in keep_qubits:
         r = random.random() * total
-        if r < x_cutoff:
-            error_char = "X"
-        elif r < y_cutoff:
-            error_char = "Y"
-        elif r < z_cutoff:
-            error_char = "Z"
-        else:
-            error_char = "I"
+        # Use bisect to find the error type (faster than chained comparisons)
+        error_idx = bisect.bisect_right(cumulative_weights, r)
+        error_char = pauli_choices[error_idx]
+        
         error[j] = error_char
         if error_char != 'I':
             has_non_identity_error = True
@@ -338,10 +308,12 @@ def apply_precomputed_layer_gate_and_idle_error(
     error = list(identity)
     has_non_identity_error = False
 
-    idle_x_cutoff = idle_weights[0]
-    idle_y_cutoff = idle_x_cutoff + idle_weights[1]
-    idle_z_cutoff = idle_y_cutoff + idle_weights[2]
-    idle_total = idle_z_cutoff + idle_weights[3]
+    # Unpack idle weights once for faster access
+    idle_x, idle_y, idle_z, idle_i = idle_weights
+    idle_x_cutoff = idle_x
+    idle_y_cutoff = idle_x_cutoff + idle_y
+    idle_z_cutoff = idle_y_cutoff + idle_z
+    idle_total = idle_z_cutoff + idle_i
 
     for (
         gate_targets,
@@ -386,6 +358,35 @@ def apply_precomputed_layer_gate_and_idle_error(
 ##########################################################################################################
 ##########################################################################################################
 #---------------------------------------- GATE FUNCTIONS ------------------------------------------------#
+def _coalesce_disjoint_gate_layers(
+    gate_sequence: List[GateOp],
+    keep_qubits: List[int],
+) -> List[Tuple[List[GateOp], List[int]]]:
+    """Group consecutive disjoint gates into one logical timestep.
+
+    Gates remain in-order within each layer; a new layer starts when the next gate
+    overlaps any qubit already used in the current layer.
+    """
+    layers: List[Tuple[List[GateOp], List[int]]] = []
+    current_ops: List[GateOp] = []
+    current_used: set[int] = set()
+
+    for gate_name, targets in gate_sequence:
+        target_set = set(targets)
+        if current_ops and current_used.intersection(target_set):
+            idle_qubits = [q for q in keep_qubits if q not in current_used]
+            layers.append((current_ops, idle_qubits))
+            current_ops = []
+            current_used = set()
+
+        current_ops.append((gate_name, targets))
+        current_used.update(target_set)
+
+    if current_ops:
+        idle_qubits = [q for q in keep_qubits if q not in current_used]
+        layers.append((current_ops, idle_qubits))
+
+    return layers
 
 def convert_gate_sequence(gate_sequence: List[GateOp], conversion_type: str) -> List[GateOp]:
     """
@@ -624,7 +625,7 @@ def get_pauli_string(
         for name, _ in effective_gate_sequence
     }
     ############# MONTE CARLO SAMPLING #################
-    # initialize counts
+    # Initialize counts (Identity calculated at end to avoid processing majority of values)
     x_count = 0
     y_count = 0
     z_count = 0
@@ -668,6 +669,7 @@ def get_pauli_string(
                 weights_init_meas,
             )
 
+            # Count only X/Y/Z errors (Identity calculated at end to avoid processing majority)
             for value in pauli:
                 pauli_value = int(value)
                 if pauli_value == 1:
@@ -709,6 +711,7 @@ def get_pauli_string(
                 weights_init_meas,
             )
 
+            # Count only X/Y/Z errors (Identity calculated at end to avoid processing majority)
             for value in pauli:
                 pauli_value = int(value)
                 if pauli_value == 1:
@@ -717,15 +720,16 @@ def get_pauli_string(
                     y_count += 1
                 elif pauli_value == 3:
                     z_count += 1
+    
     # Calculate identity count based on total observations and error counts
     total_observations = samples * compressed_size
     identity_count = (
         total_observations - (x_count + y_count + z_count)
     )
     return {0: identity_count, 1: x_count, 2: y_count, 3: z_count}
-
+###############################################################################
+###############################################################################
 #----------------- STORING DATA FUNCTIONS -----------------#
-
 def save_running_counts(
     running_counts: Dict[int, int],
     output_file: str,
@@ -752,7 +756,7 @@ def save_running_counts(
     with open(output_file, mode, encoding='utf-8') as f:
         json.dump(data, f)
         f.write('\n')
-
+###############################################################################
 def load_running_counts(input_file: str) -> Dict[int, int]:
     """
     Load cumulative running counts from a JSONL file.
@@ -797,10 +801,8 @@ def load_running_counts(input_file: str) -> Dict[int, int]:
     except FileNotFoundError:
         pass  # Return initialized counts if file doesn't exist
     return running_counts
-
-
-
-
+################################################################################
+################################################################################
 
 def _resolve_convergence_metric(
     convergence_mode: str,
@@ -1072,7 +1074,7 @@ def error_propagation_simulation(
             qubit_platform=qubit_platform,
             random_seed=None,
         )
-        generated_samples += current_batch_samples       
+        generated_samples += current_batch_samples
         # Update running counts from per-batch counts (avoids flattened list materialization).
         for pauli_type in [0, 1, 2, 3]:
             running_counts[pauli_type] += new_counts.get(pauli_type, 0)
@@ -1083,7 +1085,7 @@ def error_propagation_simulation(
             new_y_prob = running_counts[2] / total
             new_z_prob = running_counts[3] / total
         else:
-            new_i_prob = new_x_prob = new_y_prob = new_z_prob = 0.0       
+            new_i_prob = new_x_prob = new_y_prob = new_z_prob = 0.0
         # Save updated running counts
         pending_counts_rows.append({
             'counts': dict(running_counts),
@@ -1107,19 +1109,19 @@ def error_propagation_simulation(
             if previous_bias == float('inf') and bias == float('inf'):
                 convergence_bias = 0.0
             else:
-                convergence_bias = abs(previous_bias - bias)       
+                convergence_bias = abs(previous_bias - bias)
         convergence = _resolve_convergence_metric(
             normalized_convergence_mode,
             convergence_X,
             convergence_Y,
             convergence_Z,
             convergence_bias,
-        )        
+        )
         # Check convergence criteria and update consecutive count
         if convergence < convergence_threshold:
             consecutive_convergence_count += 1
         else:
-            consecutive_convergence_count = 0  # Reset counter if convergence is not met        
+            consecutive_convergence_count = 0  # Reset counter if convergence is not met
         # Save progress to same file (append)
         pending_progress_lines.append(
             f"{iteration},{new_i_prob:.8f},{new_x_prob:.8f},{new_y_prob:.8f},{new_z_prob:.8f},{bias},{convergence_I:.2e},{convergence_X:.2e},{convergence_Y:.2e},{convergence_Z:.2e},{convergence:.2e},{consecutive_convergence_count},{generated_samples}\n"
