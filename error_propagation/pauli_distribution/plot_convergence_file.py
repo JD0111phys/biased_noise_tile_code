@@ -21,6 +21,7 @@ import argparse
 import csv
 import math
 import re
+import json
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -100,6 +101,7 @@ def _build_output_path_with_flags(
     log_scale: bool,
     with_bias_convergence: bool,
     x_axis: str,
+    manual_sigfig: int | None = None,
 ) -> Path:
     stem = progress_file.stem
     parts = ["convergence_plots"]
@@ -115,8 +117,10 @@ def _build_output_path_with_flags(
         parts.append("biasconv")
     if x_axis == "samples":
         parts.append("x_samples")
+    if manual_sigfig is not None:
+        parts.append(f"sigfig{manual_sigfig}")
     suffix = "_".join(parts)
-    return progress_file.with_name(f"{stem}_{suffix}.png")
+    return progress_file.with_name(f"{stem}_{suffix}.svg")
 
 
 def _moving_average(values: List[float], window: int) -> List[float]:
@@ -188,6 +192,146 @@ def _has_finite(values: List[float]) -> bool:
     return any(math.isfinite(v) for v in values)
 
 
+def _parse_counts_stats(counts_file: Path) -> List[Tuple[float, float, float, float, float, float, float, float]]:
+    """Parse cumulative count rows into probabilities and standard errors.
+
+    Returns tuples of:
+        (p_x, p_y, p_z, bias, se_x, se_y, se_z, se_bias)
+    """
+    stats: List[Tuple[float, float, float, float, float, float, float, float]] = []
+    with counts_file.open("r", encoding="utf-8") as f:
+        for raw_line in f:
+            stripped = raw_line.strip()
+            if not stripped:
+                continue
+            try:
+                data = json.loads(stripped)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(data, dict):
+                continue
+            if "counts" in data and isinstance(data["counts"], dict):
+                counts_obj = data["counts"]
+            else:
+                counts_obj = data
+
+            if not all(str(pauli_type) in counts_obj or pauli_type in counts_obj for pauli_type in (0, 1, 2, 3)):
+                # Skip metadata rows that do not carry Pauli counts.
+                continue
+
+            try:
+                c_i = int(counts_obj.get("0", counts_obj.get(0, 0)))
+                c_x = int(counts_obj.get("1", counts_obj.get(1, 0)))
+                c_y = int(counts_obj.get("2", counts_obj.get(2, 0)))
+                c_z = int(counts_obj.get("3", counts_obj.get(3, 0)))
+            except (TypeError, ValueError):
+                continue
+            total = c_i + c_x + c_y + c_z
+            if total <= 0:
+                stats.append((math.nan, math.nan, math.nan, math.nan, math.nan, math.nan, math.nan, math.nan))
+                continue
+
+            n = float(total)
+            p_x = c_x / n
+            p_y = c_y / n
+            p_z = c_z / n
+            s_xy = p_x + p_y
+            bias = p_z / s_xy if s_xy > 0.0 else math.inf
+
+            se_x = math.sqrt(max(0.0, p_x * (1.0 - p_x) / n))
+            se_y = math.sqrt(max(0.0, p_y * (1.0 - p_y) / n))
+            se_z = math.sqrt(max(0.0, p_z * (1.0 - p_z) / n))
+
+            if s_xy > 0.0 and math.isfinite(bias):
+                var_bias = p_z * (p_z + s_xy) / (n * (s_xy ** 3))
+                se_bias = math.sqrt(max(0.0, var_bias))
+            else:
+                se_bias = math.nan
+
+            stats.append((p_x, p_y, p_z, bias, se_x, se_y, se_z, se_bias))
+
+    if not stats:
+        raise ValueError(f"No valid count rows parsed from: {counts_file}")
+    return stats
+
+
+def _compute_convergence_cis(
+    x_conv: List[float],
+    y_conv: List[float],
+    z_conv: List[float],
+    bias_conv: List[float],
+    count_stats: List[Tuple[float, float, float, float, float, float, float, float]],
+    z_score: float,
+) -> Tuple[List[float], List[float], List[float], List[float], List[float], List[float], List[float], List[float]]:
+    """Compute CI bounds for convergence deltas using propagated row-to-row SE."""
+    n_rows = len(x_conv)
+    if len(count_stats) == n_rows + 1:
+        offset = 1
+    elif len(count_stats) == n_rows:
+        offset = 0
+    else:
+        raise ValueError(
+            "counts file rows do not align with parsed convergence rows. "
+            f"counts_rows={len(count_stats)}, convergence_rows={n_rows}"
+        )
+
+    x_low: List[float] = []
+    x_high: List[float] = []
+    y_low: List[float] = []
+    y_high: List[float] = []
+    z_low: List[float] = []
+    z_high: List[float] = []
+    b_low: List[float] = []
+    b_high: List[float] = []
+
+    for idx in range(n_rows):
+        current = count_stats[idx + offset]
+        previous = count_stats[idx + offset - 1] if idx + offset - 1 >= 0 else None
+
+        if previous is None:
+            se_dx = se_dy = se_dz = se_db = math.nan
+        else:
+            se_dx = math.sqrt(current[4] ** 2 + previous[4] ** 2) if math.isfinite(current[4]) and math.isfinite(previous[4]) else math.nan
+            se_dy = math.sqrt(current[5] ** 2 + previous[5] ** 2) if math.isfinite(current[5]) and math.isfinite(previous[5]) else math.nan
+            se_dz = math.sqrt(current[6] ** 2 + previous[6] ** 2) if math.isfinite(current[6]) and math.isfinite(previous[6]) else math.nan
+            se_db = math.sqrt(current[7] ** 2 + previous[7] ** 2) if math.isfinite(current[7]) and math.isfinite(previous[7]) else math.nan
+
+        x_value = x_conv[idx]
+        y_value = y_conv[idx]
+        z_value = z_conv[idx]
+        b_value = bias_conv[idx]
+
+        if math.isfinite(x_value) and math.isfinite(se_dx):
+            x_low.append(max(0.0, x_value - z_score * se_dx))
+            x_high.append(x_value + z_score * se_dx)
+        else:
+            x_low.append(math.nan)
+            x_high.append(math.nan)
+
+        if math.isfinite(y_value) and math.isfinite(se_dy):
+            y_low.append(max(0.0, y_value - z_score * se_dy))
+            y_high.append(y_value + z_score * se_dy)
+        else:
+            y_low.append(math.nan)
+            y_high.append(math.nan)
+
+        if math.isfinite(z_value) and math.isfinite(se_dz):
+            z_low.append(max(0.0, z_value - z_score * se_dz))
+            z_high.append(z_value + z_score * se_dz)
+        else:
+            z_low.append(math.nan)
+            z_high.append(math.nan)
+
+        if math.isfinite(b_value) and math.isfinite(se_db):
+            b_low.append(max(0.0, b_value - z_score * se_db))
+            b_high.append(b_value + z_score * se_db)
+        else:
+            b_low.append(math.nan)
+            b_high.append(math.nan)
+
+    return x_low, x_high, y_low, y_high, z_low, z_high, b_low, b_high
+
+
 def plot_convergence_file(
     progress_file: Path,
     output_path: Path | None = None,
@@ -198,9 +342,31 @@ def plot_convergence_file(
     iter_end: int | None = None,
     with_bias_convergence: bool = True,
     x_axis: str = "iteration",
+    counts_file: Path | None = None,
+    error_bars: bool = False,
+    error_z: float = 1.96,
 ) -> Path:
     """Create and save a grid for X/Y/Z convergence and optional bias convergence vs iteration."""
-    iterations, generated_samples, x_conv, y_conv, z_conv, bias_conv, convergence_mode = _parse_progress_file(progress_file)
+    all_iterations, all_generated_samples, all_x_conv, all_y_conv, all_z_conv, all_bias_conv, convergence_mode = _parse_progress_file(progress_file)
+
+    selected_indices = [
+        idx
+        for idx, iteration in enumerate(all_iterations)
+        if (iter_start is None or iteration >= iter_start) and (iter_end is None or iteration <= iter_end)
+    ]
+    if not selected_indices:
+        raise ValueError(
+            "No rows remain after applying iteration range filter: "
+            f"start={iter_start}, end={iter_end}."
+        )
+
+    iterations = [all_iterations[idx] for idx in selected_indices]
+    generated_samples = [all_generated_samples[idx] for idx in selected_indices]
+    x_conv = [all_x_conv[idx] for idx in selected_indices]
+    y_conv = [all_y_conv[idx] for idx in selected_indices]
+    z_conv = [all_z_conv[idx] for idx in selected_indices]
+    bias_conv = [all_bias_conv[idx] for idx in selected_indices]
+
     iterations, generated_samples, x_conv, y_conv, z_conv, bias_conv = _filter_iteration_range(
         iterations,
         generated_samples,
@@ -239,6 +405,33 @@ def plot_convergence_file(
     else:
         x_values = iterations
         x_label = "Iteration"
+
+    x_low = x_high = y_low = y_high = z_low = z_high = b_low = b_high = None
+    if error_bars:
+        if counts_file is None:
+            raise ValueError("--error-bars requires --counts-file.")
+        if not counts_file.exists() or counts_file.is_dir():
+            raise FileNotFoundError(f"Counts file not found or is not a file: {counts_file}")
+        count_stats_all = _parse_counts_stats(counts_file)
+        if len(count_stats_all) < len(all_iterations):
+            raise ValueError(
+                "counts file rows do not align with parsed convergence rows. "
+                f"counts_rows={len(count_stats_all)}, convergence_rows={len(all_iterations)}"
+            )
+        if len(count_stats_all) > len(all_iterations):
+            # Older runs may contain one or more extra trailing count rows.
+            aligned_count_stats_all = count_stats_all[-len(all_iterations):]
+        else:
+            aligned_count_stats_all = count_stats_all
+        count_stats = [aligned_count_stats_all[idx] for idx in selected_indices]
+        x_low, x_high, y_low, y_high, z_low, z_high, b_low, b_high = _compute_convergence_cis(
+            x_conv,
+            y_conv,
+            z_conv,
+            bias_conv,
+            count_stats,
+            error_z,
+        )
 
     fig, axes = plt.subplots(2, 2, figsize=(12, 8), sharex=True)
     ax_x, ax_y, ax_z, ax_fourth = axes.ravel()
@@ -306,21 +499,29 @@ def plot_convergence_file(
     ax_x.set_title("X convergence")
     ax_x.set_ylabel("X convergence")
     ax_x.grid(True, alpha=0.3)
+    if error_bars and x_low is not None and x_high is not None:
+        ax_x.fill_between(x_values, x_low, x_high, color="tab:blue", alpha=0.18, linewidth=0)
 
     ax_y.set_title("Y convergence")
     ax_y.set_ylabel("Y convergence")
     ax_y.grid(True, alpha=0.3)
+    if error_bars and y_low is not None and y_high is not None:
+        ax_y.fill_between(x_values, y_low, y_high, color="tab:orange", alpha=0.18, linewidth=0)
 
     ax_z.set_title("Z convergence")
     ax_z.set_ylabel("Z convergence")
     ax_z.set_xlabel(x_label)
     ax_z.grid(True, alpha=0.3)
+    if error_bars and z_low is not None and z_high is not None:
+        ax_z.fill_between(x_values, z_low, z_high, color="tab:green", alpha=0.18, linewidth=0)
 
     if with_bias_convergence and ax_b is not None:
         ax_b.set_title("Bias convergence")
         ax_b.set_ylabel("Bias convergence")
         ax_b.set_xlabel(x_label)
         ax_b.grid(True, alpha=0.3)
+        if error_bars and b_low is not None and b_high is not None:
+            ax_b.fill_between(x_values, b_low, b_high, color="tab:purple", alpha=0.18, linewidth=0)
 
     if log_scale:
         axes_to_scale = [ax_x, ax_y, ax_z]
@@ -342,7 +543,8 @@ def plot_convergence_file(
         f"iter_range={iter_label_start}-{iter_label_end}, "
         f"smooth_window={smooth_window}, log_scale={log_scale}, "
         f"with_bias_convergence={with_bias_convergence}, x_axis={normalized_x_axis}, "
-        f"detected_mode={convergence_mode if convergence_mode is not None else 'unknown'}"
+        f"detected_mode={convergence_mode if convergence_mode is not None else 'unknown'}, "
+        f"error_bars={error_bars}, error_z={error_z}"
     )
     fig.suptitle(f"Convergence deltas from {progress_file.name}")
     fig.text(0.5, 0.01, f"Flags: {flags_label}", ha="center", fontsize=9)
@@ -350,11 +552,11 @@ def plot_convergence_file(
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        fig.savefig(output_path, dpi=200)
+        fig.savefig(output_path, format='svg')
     except FileNotFoundError:
         fallback_output = (Path.cwd() / output_path.name).resolve()
         fallback_output.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(fallback_output, dpi=200)
+        fig.savefig(fallback_output, format='svg')
         output_path = fallback_output
 
     if show:
@@ -374,6 +576,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         type=Path,
         required=True,
         help="Path to effective_probs_<platform>_<timestamp>.txt",
+    )
+    parser.add_argument(
+        "--preset",
+        choices=["basic", "uncertainty"],
+        default="basic",
+        help="Convenience preset that enables a recommended set of options.",
     )
     parser.add_argument(
         "--output",
@@ -425,6 +633,23 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default="iteration",
         help="X-axis to use. 'samples' requires Generated_Samples column in the progress file.",
     )
+    parser.add_argument(
+        "--counts-file",
+        type=Path,
+        default=None,
+        help="Path to running_counts_<platform>_<timestamp>.jsonl used for uncertainty bands.",
+    )
+    parser.add_argument(
+        "--error-bars",
+        action="store_true",
+        help="Plot approximate confidence bands for convergence deltas (requires --counts-file).",
+    )
+    parser.add_argument(
+        "--error-z",
+        type=float,
+        default=1.96,
+        help="Z-score multiplier for uncertainty bands (default: 1.96).",
+    )
     return parser
 
 
@@ -443,6 +668,9 @@ def main() -> None:
     if args.iter_start is not None and args.iter_end is not None and args.iter_start > args.iter_end:
         raise ValueError("--iter-start must be <= --iter-end.")
 
+    if args.preset == "uncertainty":
+        args.error_bars = True
+
     output_path = plot_convergence_file(
         progress_file=progress_file,
         output_path=args.output,
@@ -453,6 +681,9 @@ def main() -> None:
         iter_end=args.iter_end,
         with_bias_convergence=not args.no_bias_convergence,
         x_axis=args.x_axis,
+        counts_file=args.counts_file,
+        error_bars=args.error_bars,
+        error_z=args.error_z,
     )
     print(f"Saved plots to: {output_path}")
 
