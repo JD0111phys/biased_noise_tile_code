@@ -8,8 +8,8 @@
 #- compute effective Pauli probabilities,
 #- run iterative simulations until convergence.
 
-from stim import PauliString, Tableau
 import random
+from stim import PauliString, Tableau  # type: ignore
 from typing import List, Tuple, Dict, Optional, Any, cast
 import json
 
@@ -40,10 +40,6 @@ def _sample_from_cumulative(choices: Tuple[str, ...], cumulative_weights: Tuple[
         if r < cutoff:
             return choice
     return choices[-1]
-
-
-def _ordered_weights(probabilities: Dict[str, float], order: Tuple[str, ...]) -> Tuple[float, ...]:
-    return tuple(probabilities[label] for label in order)
 
 
 def _coalesce_disjoint_gate_layers(
@@ -77,142 +73,38 @@ def _coalesce_disjoint_gate_layers(
     return layers
 
 
-_SC_CX_PROBS: Dict[str, float] = {
-    'II': 0.9971089697418947,
-    'IX': 2.7934102919680015e-08,
-    'IY': 2.3735336432129106e-06,
-    'IZ': 0.0007172714715934017,
-    'XI': 2.7711807848440628e-08,
-    'XX': 2.5207188356080046e-07,
-    'XY': 0.00023518786621833793,
-    'XZ': 2.5886150639697902e-08,
-    'YI': 2.3732742409909857e-06,
-    'YX': 0.00023518786621884447,
-    'YY': 2.5207741582294885e-07,
-    'YZ': 2.5808276786498663e-08,
-    'ZI': 0.0007125772927424889,
-    'ZX': 2.5887020388415394e-08,
-    'ZY': 2.579754807691126e-08,
-    'ZZ': 0.0009853957792419835,
-}
-
-_TI_CNOT_CX_PROBS: Dict[str, float] = {
-    'II': 0.9970978744492904,
-    'IX': 3.3560719574221576e-07,
-    'IY': 0.00028982952089751796,
-    'IZ': 0.00038654305587448867,
-    'XI': 0.0005800408405701243,
-    'XX': 3.275762831961293e-07,
-    'XY': 9.677438302829744e-05,
-    'XZ': 2.860259729967063e-07,
-    'YI': 0.0002907835269792061,
-    'YX': 9.66060922966e-05,
-    'YY': 1.386814579007467e-07,
-    'YZ': 2.580023215695282e-07,
-    'ZI': 0.0009661361035463306,
-    'ZX': 1.1755776622990322e-07,
-    'ZY': 3.137816749348987e-07,
-    'ZZ': 0.00019363479484440366,
-}
-
-_TI_CZ_CZ_PROBS: Dict[str, float] = {
-    'II': 0.997064919955593,
-    'IX': 2.6383893972359296e-08,
-    'IY': 2.6383893986237084e-08,
-    'IZ': 0.0009970331256010934,
-    'XI': 2.6383893972359296e-08,
-    'XX': 2.3561940468153075e-08,
-    'XY': 2.3561940468153075e-08,
-    'XZ': 2.3567419182857208e-08,
-    'YI': 2.6383893972359296e-08,
-    'YX': 2.3561940468153075e-08,
-    'YY': 2.3561940468153075e-08,
-    'YZ': 2.3567419182857208e-08,
-    'ZI': 0.0009970331256011072,
-    'ZX': 2.356741916897942e-08,
-    'ZY': 2.3567419182857208e-08,
-    'ZZ': 0.0009407197401905265,
-}
-
-_NA_CZ_PROBS: Dict[str, float] = {
-    'II': 0.997068734751876,
-    'IX': 2.0905858801045785e-08,
-    'IY': 2.090585879410689e-08,
-    'IZ': 0.0009635217661934578,
-    'XI': 2.0489466380502197e-08,
-    'XX': 2.04892314434324e-08,
-    'XY': 2.0489231478126868e-08,
-    'XZ': 2.0489466380502197e-08,
-    'YI': 2.0489466380502197e-08,
-    'YX': 2.0489231471187974e-08,
-    'YY': 2.0489231450371292e-08,
-    'YZ': 2.048946638744109e-08,
-    'ZI': 0.0008600034582691082,
-    'ZX': 2.0905858801045785e-08,
-    'ZY': 2.090585879410689e-08,
-    'ZZ': 0.0009735718210506714,
-}
-
-_H_PROBS: Dict[str, float] = {
-    'II': 0.9970831318064503,
-    'XI': 0.0004876108844646676,
-    'YI': 0.0009721305333010022,
-    'ZI': 0.0014571267757840511,
-}
-
-_S_PROBS: Dict[str, float] = {
-    'II': 0.9970240579376571,
-    'IX': 1.4922560645502791e-07,
-    'IY': 1.4922560645502791e-07,
-    'IZ': 0.00297564361112998,
-}
-
-_H_WEIGHTS: Tuple[float, ...] = (_H_PROBS['II'], _H_PROBS['XI'], _H_PROBS['YI'], _H_PROBS['ZI'])
-_S_WEIGHTS: Tuple[float, ...] = (_S_PROBS['II'], _S_PROBS['IX'], _S_PROBS['IY'], _S_PROBS['IZ'])
+# Precompute cumulative weights for single-qubit gates (shared across all platforms).
+_H_WEIGHTS: Tuple[float, ...] = (0.9970831318064503, 0.0004876108844646676, 0.0009721305333010022, 0.0014571267757840511)
+_S_WEIGHTS: Tuple[float, ...] = (0.9970240579376571, 1.4922560645502791e-07, 1.4922560645502791e-07, 0.00297564361112998)
 _H_CUM_WEIGHTS: Tuple[float, ...] = _cumulative_weights(_H_WEIGHTS)
 _S_CUM_WEIGHTS: Tuple[float, ...] = _cumulative_weights(_S_WEIGHTS)
 
+_SC_CX_WEIGHTS: Tuple[float, ...] = (0.9971089697418947, 2.7934102919680015e-08, 2.3735336432129106e-06, 0.0007172714715934017, 2.7711807848440628e-08, 2.5207188356080046e-07, 0.00023518786621833793, 2.5886150639697902e-08, 2.3732742409909857e-06, 0.00023518786621884447, 2.5207741582294885e-07, 2.5808276786498663e-08, 0.0007125772927424889, 2.5887020388415394e-08, 2.579754807691126e-08, 0.0009853957792419835)
+_TI_CNOT_CX_WEIGHTS: Tuple[float, ...] = (0.9970978744492904, 3.3560719574221576e-07, 0.00028982952089751796, 0.00038654305587448867, 0.0005800408405701243, 3.275762831961293e-07, 9.677438302829744e-05, 2.860259729967063e-07, 0.0002907835269792061, 9.66060922966e-05, 1.386814579007467e-07, 2.580023215695282e-07, 0.0009661361035463306, 1.1755776622990322e-07, 3.137816749348987e-07, 0.00019363479484440366)
+_TI_CZ_CZ_WEIGHTS: Tuple[float, ...] = (0.997064919955593, 2.6383893972359296e-08, 2.6383893986237084e-08, 0.0009970331256010934, 2.6383893972359296e-08, 2.3561940468153075e-08, 2.3561940468153075e-08, 2.3567419182857208e-08, 2.6383893972359296e-08, 2.3561940468153075e-08, 2.3561940468153075e-08, 2.3567419182857208e-08, 0.0009970331256011072, 2.356741916897942e-08, 2.3567419182857208e-08, 0.0009407197401905265)
+_NA_CZ_WEIGHTS: Tuple[float, ...] = (0.997068734751876, 2.0905858801045785e-08, 2.090585879410689e-08, 0.0009635217661934578, 2.0489466380502197e-08, 2.04892314434324e-08, 2.0489231478126868e-08, 2.0489466380502197e-08, 2.0489466380502197e-08, 2.0489231471187974e-08, 2.0489231450371292e-08, 2.048946638744109e-08, 0.0008600034582691082, 2.0905858801045785e-08, 2.090585879410689e-08, 0.0009735718210506714)
+
 _GATE_ERROR_CHANNELS: Dict[str, Dict[str, Tuple[Tuple[str, ...], Tuple[float, ...], Tuple[float, ...], int]]] = {
     'superconducting': {
-        'CX': (
-            _TWO_QUBIT_ERROR_CHOICES,
-            _ordered_weights(_SC_CX_PROBS, _TWO_QUBIT_ERROR_CHOICES),
-            _cumulative_weights(_ordered_weights(_SC_CX_PROBS, _TWO_QUBIT_ERROR_CHOICES)),
-            2,
-        ),
+        'CX': (_TWO_QUBIT_ERROR_CHOICES, _SC_CX_WEIGHTS, _cumulative_weights(_SC_CX_WEIGHTS), 2),
         'H': (_SINGLE_QUBIT_ERROR_CHOICES, _H_WEIGHTS, _H_CUM_WEIGHTS, 1),
         'S': (_SINGLE_QUBIT_ERROR_CHOICES, _S_WEIGHTS, _S_CUM_WEIGHTS, 1),
         'S_DAG': (_SINGLE_QUBIT_ERROR_CHOICES, _S_WEIGHTS, _S_CUM_WEIGHTS, 1),
     },
     'trapped_ion_cnot': {
-        'CX': (
-            _TWO_QUBIT_ERROR_CHOICES,
-            _ordered_weights(_TI_CNOT_CX_PROBS, _TWO_QUBIT_ERROR_CHOICES),
-            _cumulative_weights(_ordered_weights(_TI_CNOT_CX_PROBS, _TWO_QUBIT_ERROR_CHOICES)),
-            2,
-        ),
+        'CX': (_TWO_QUBIT_ERROR_CHOICES, _TI_CNOT_CX_WEIGHTS, _cumulative_weights(_TI_CNOT_CX_WEIGHTS), 2),
         'H': (_SINGLE_QUBIT_ERROR_CHOICES, _H_WEIGHTS, _H_CUM_WEIGHTS, 1),
         'S': (_SINGLE_QUBIT_ERROR_CHOICES, _S_WEIGHTS, _S_CUM_WEIGHTS, 1),
         'S_DAG': (_SINGLE_QUBIT_ERROR_CHOICES, _S_WEIGHTS, _S_CUM_WEIGHTS, 1),
     },
     'trapped_ion_cz': {
-        'CZ': (
-            _TWO_QUBIT_ERROR_CHOICES,
-            _ordered_weights(_TI_CZ_CZ_PROBS, _TWO_QUBIT_ERROR_CHOICES),
-            _cumulative_weights(_ordered_weights(_TI_CZ_CZ_PROBS, _TWO_QUBIT_ERROR_CHOICES)),
-            2,
-        ),
+        'CZ': (_TWO_QUBIT_ERROR_CHOICES, _TI_CZ_CZ_WEIGHTS, _cumulative_weights(_TI_CZ_CZ_WEIGHTS), 2),
         'H': (_SINGLE_QUBIT_ERROR_CHOICES, _H_WEIGHTS, _H_CUM_WEIGHTS, 1),
         'S': (_SINGLE_QUBIT_ERROR_CHOICES, _S_WEIGHTS, _S_CUM_WEIGHTS, 1),
         'S_DAG': (_SINGLE_QUBIT_ERROR_CHOICES, _S_WEIGHTS, _S_CUM_WEIGHTS, 1),
     },
     'neutral_atom': {
-        'CZ': (
-            _TWO_QUBIT_ERROR_CHOICES,
-            _ordered_weights(_NA_CZ_PROBS, _TWO_QUBIT_ERROR_CHOICES),
-            _cumulative_weights(_ordered_weights(_NA_CZ_PROBS, _TWO_QUBIT_ERROR_CHOICES)),
-            2,
-        ),
+        'CZ': (_TWO_QUBIT_ERROR_CHOICES, _NA_CZ_WEIGHTS, _cumulative_weights(_NA_CZ_WEIGHTS), 2),
         'H': (_SINGLE_QUBIT_ERROR_CHOICES, _H_WEIGHTS, _H_CUM_WEIGHTS, 1),
         'S': (_SINGLE_QUBIT_ERROR_CHOICES, _S_WEIGHTS, _S_CUM_WEIGHTS, 1),
         'S_DAG': (_SINGLE_QUBIT_ERROR_CHOICES, _S_WEIGHTS, _S_CUM_WEIGHTS, 1),
@@ -220,12 +112,25 @@ _GATE_ERROR_CHANNELS: Dict[str, Dict[str, Tuple[Tuple[str, ...], Tuple[float, ..
     'ideal': {},
 }
 
-_UNSUPPORTED_GATE_ERROR_MESSAGES: Dict[str, str] = {
-    'superconducting': "Unsupported gate {gate_name} for superconducting platform.",
-    'trapped_ion_cnot': "Unsupported gate {gate_name} for trapped ion platform.",
-    'trapped_ion_cz': "Unsupported gate {gate_name} for trapped ion_cz platform.",
-    'neutral_atom': "Unsupported gate {gate_name} for neutral atom platform.",
-}
+def _get_unsupported_gate_error_message(gate_name: str, platform: str) -> str:
+    """Generate unsupported gate error message on-demand."""
+    platform_names = {
+        'superconducting': 'superconducting',
+        'trapped_ion_cnot': 'trapped ion',
+        'trapped_ion_cz': 'trapped ion_cz',
+        'neutral_atom': 'neutral atom',
+    }
+    platform_label = platform_names.get(platform, platform)
+    return f"Unsupported gate {gate_name} for {platform_label} platform."
+
+def _get_platform_channels(qubit_platform: str) -> Optional[Dict[str, Tuple[Tuple[str, ...], Tuple[float, ...], Tuple[float, ...], int]]]:
+    """Get gate error channels for a platform, or None if platform is 'ideal'."""
+    if qubit_platform == 'ideal':
+        return None
+    platform_channels = _GATE_ERROR_CHANNELS.get(qubit_platform)
+    if platform_channels is None:
+        raise ValueError(f"Unsupported qubit platform: {qubit_platform}")
+    return platform_channels
 
 #----------------- APPLY ERROR FUNCTIONS -----------------#
 
@@ -333,16 +238,12 @@ def apply_gate_error_channel(pauli: PauliString, gate_name: str, targets: List[i
     if qubit_platform == 'ideal':
         return pauli
 
-    platform_channels = _GATE_ERROR_CHANNELS.get(qubit_platform)
-    if platform_channels is None:
-        raise ValueError(f"Unsupported qubit platform: {qubit_platform}")
+    platform_channels = _get_platform_channels(qubit_platform)
+    assert platform_channels is not None  # Type guard: guaranteed non-None after _get_platform_channels() for non-ideal platform
 
     channel = platform_channels.get(gate_name)
     if channel is None:
-        message = _UNSUPPORTED_GATE_ERROR_MESSAGES.get(qubit_platform)
-        if message is None:
-            raise ValueError(f"Unsupported qubit platform: {qubit_platform}")
-        raise ValueError(message.format(gate_name=gate_name))
+        raise ValueError(_get_unsupported_gate_error_message(gate_name, qubit_platform))
 
     choices, _weights, cumulative, arity = channel
     error = list(identity)
@@ -518,7 +419,6 @@ def get_pauli_string(
         ancilla: Optional[List[int]] = None,
         qubit_platform: str = "superconducting",
         random_seed: Optional[int] = None,
-    use_compressed_space: bool = True,
     initial_pauli_string: Optional[str] = None,
     return_counts: bool = False,
     coalesce_disjoint_timesteps: bool = False,
@@ -543,7 +443,6 @@ def get_pauli_string(
             (native gate compilation), but generic stochastic error insertion
             is still performed.
         random_seed: Random seed for reproducible error generation (optional).
-        use_compressed_space: If True, operates only on used qubits for massive speedup (default).
         initial_pauli_string: Optional initial Pauli string in compressed qubit space.
             If not provided, starts from identity on all compressed qubits.
         return_counts: If True, return accumulated counts
@@ -564,7 +463,6 @@ def get_pauli_string(
         cumulative counts ``{0: I_count, 1: X_count, 2: Y_count, 3: Z_count}``.
 
     Raises:
-        NotImplementedError: If use_compressed_space is False.
         ValueError: If samples is negative, p is outside [0, 1], or system_bias is negative.
     """
     if gate_sequence is None:
@@ -582,9 +480,6 @@ def get_pauli_string(
     # Set random seed if provided for reproducible results
     if random_seed is not None:
         random.seed(random_seed)
-
-    if not use_compressed_space:
-        raise NotImplementedError("Non-compressed path is not supported. Set use_compressed_space=True.")
 
     # Use compressed qubit space for massive speedup
     all_used_qubits = sorted(set(keep_qubits) | set(ancilla))
@@ -622,11 +517,7 @@ def get_pauli_string(
         ]
     )
     precomputed_layers: List[List[Tuple[List[int], Tuple[Tuple[int, int], ...], Tuple[str, ...], Tuple[float, ...], int]]] = []
-    platform_channels = None
-    if qubit_platform != 'ideal':
-        platform_channels = _GATE_ERROR_CHANNELS.get(qubit_platform)
-        if platform_channels is None:
-            raise ValueError(f"Unsupported qubit platform: {qubit_platform}")
+    platform_channels = _get_platform_channels(qubit_platform)
 
     for layer_ops, _idle_qubits in gate_layers:
         layer_meta: List[Tuple[List[int], Tuple[Tuple[int, int], ...], Tuple[str, ...], Tuple[float, ...], int]] = []
@@ -634,10 +525,7 @@ def get_pauli_string(
             for gate_name, gate_targets in layer_ops:
                 channel = platform_channels.get(gate_name)
                 if channel is None:
-                    message = _UNSUPPORTED_GATE_ERROR_MESSAGES.get(qubit_platform)
-                    if message is None:
-                        raise ValueError(f"Unsupported qubit platform: {qubit_platform}")
-                    raise ValueError(message.format(gate_name=gate_name))
+                    raise ValueError(_get_unsupported_gate_error_message(gate_name, qubit_platform))
 
                 choices, _gate_weights, gate_cumulative_weights, arity = channel
                 two_qubit_pairs: Tuple[Tuple[int, int], ...] = tuple(pairwise_tuples(gate_targets)) if arity == 2 else ()
@@ -742,7 +630,7 @@ def save_running_counts(running_counts: Dict[int, int], output_file: str, append
         'counts': running_counts,
         'seed': seed
     } 
-    with open(output_file, mode) as f:
+    with open(output_file, mode, encoding='utf-8') as f:
         json.dump(data, f)
         f.write('\n')
 
@@ -757,13 +645,12 @@ def load_running_counts(input_file: str) -> Dict[int, int]:
         Dictionary with cumulative counts {0: I_count, 1: X_count, 2: Y_count, 3: Z_count}.
 
     Notes:
-        - Supports legacy lines that store counts directly (without a 'counts' key).
         - Ignores seed metadata if present.
         - Skips malformed JSON lines and continues processing.
     """
     running_counts = {0: 0, 1: 0, 2: 0, 3: 0}
     try:
-        with open(input_file, 'r') as f:
+        with open(input_file, 'r', encoding='utf-8') as f:
             for line in f:
                 if line.strip():  # Skip empty lines
                     try:
@@ -774,11 +661,10 @@ def load_running_counts(input_file: str) -> Dict[int, int]:
                     if not isinstance(data, dict):
                         continue
                     data_dict = cast(Dict[Any, Any], data)
-                    # Handle both old format (direct counts) and new format (with seed)
-                    if 'counts' in data_dict:
-                        counts = data_dict['counts']
-                    else:
-                        counts = data_dict  # Backward compatibility with old format
+                    # Extract counts from new format
+                    if 'counts' not in data_dict:
+                        continue
+                    counts = data_dict['counts']
                     if not isinstance(counts, dict):
                         continue
                     counts_dict = cast(Dict[Any, Any], counts)
@@ -791,52 +677,7 @@ def load_running_counts(input_file: str) -> Dict[int, int]:
     return running_counts
 
 
-def _last_numeric_iteration(progress_file: str) -> int:
-    """Return the last numeric iteration index found in a progress file."""
-    last_iteration = 0
-    try:
-        with open(progress_file, 'r', encoding='utf-8') as f:
-            for line in f:
-                stripped = line.strip()
-                if not stripped or stripped.startswith('#'):
-                    continue
-                first_field = stripped.split(',', 1)[0]
-                try:
-                    last_iteration = int(first_field)
-                except ValueError:
-                    continue
-    except FileNotFoundError:
-        return 0
-    return last_iteration
 
-
-def _first_seed_from_counts_file(input_file: str) -> Optional[int]:
-    """Return the first valid seed value stored in a counts JSONL file, if any."""
-    try:
-        with open(input_file, 'r', encoding='utf-8') as f:
-            for line in f:
-                stripped = line.strip()
-                if not stripped:
-                    continue
-                try:
-                    data = json.loads(stripped)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(data, dict):
-                    continue
-                data_dict = cast(Dict[Any, Any], data)
-                if 'seed' not in data_dict:
-                    continue
-                seed_value = data_dict.get('seed')
-                if seed_value is None:
-                    continue
-                try:
-                    return int(seed_value)
-                except (TypeError, ValueError):
-                    continue
-    except FileNotFoundError:
-        return None
-    return None
 
 
 def _resolve_convergence_metric(
@@ -966,7 +807,32 @@ def error_propagation_simulation(
             raise FileNotFoundError(f"Resume counts file not found: {resume_counts_file}") from exc
 
         # Avoid reusing the exact initial seed from the loaded run.
-        prior_seed = _first_seed_from_counts_file(resume_counts_file)
+        prior_seed = None
+        try:
+            with open(resume_counts_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    stripped = line.strip()
+                    if not stripped:
+                        continue
+                    try:
+                        data = json.loads(stripped)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(data, dict):
+                        continue
+                    data_dict = cast(Dict[Any, Any], data)
+                    if 'seed' not in data_dict:
+                        continue
+                    seed_value = data_dict.get('seed')
+                    if seed_value is None:
+                        continue
+                    try:
+                        prior_seed = int(seed_value)
+                        break
+                    except (TypeError, ValueError):
+                        continue
+        except FileNotFoundError:
+            pass
         if prior_seed is not None and chosen_seed == prior_seed:
             chosen_seed += 1
 
@@ -1051,7 +917,24 @@ def error_propagation_simulation(
             )
 
     convergence = 100.0
-    iteration = _last_numeric_iteration(progress_file) if is_resuming else 0
+    if is_resuming:
+        last_iteration = 0
+        try:
+            with open(progress_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    stripped = line.strip()
+                    if not stripped or stripped.startswith('#'):
+                        continue
+                    first_field = stripped.split(',', 1)[0]
+                    try:
+                        last_iteration = int(first_field)
+                    except ValueError:
+                        continue
+        except FileNotFoundError:
+            pass
+        iteration = last_iteration
+    else:
+        iteration = 0
     consecutive_convergence_count = 0
     pending_counts_rows: List[Dict[str, Any]] = []
     pending_progress_lines: List[str] = []
