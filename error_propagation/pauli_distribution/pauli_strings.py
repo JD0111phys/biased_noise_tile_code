@@ -91,37 +91,127 @@ _NA_CZ_WEIGHTS: Tuple[float, ...] = (
     0.0009735718210506714,
 )
 
+# New weights for p=0.0003, bias=100
+_H_WEIGHTS_NEW: Tuple[float, ...] = (
+    0.9997144181762936,
+    4.834081745078156e-05,
+    9.519846944372468e-05,
+    0.00014204253681199264,
+)
+_S_WEIGHTS_NEW: Tuple[float, ...] = (
+    0.9996827965731347,
+    1.5707913905149695e-06,
+    1.5707913905704807e-06,
+    0.0003140618440840848,
+)
+_H_CUM_WEIGHTS_NEW: Tuple[float, ...] = _cumulative_weights(_H_WEIGHTS_NEW)
+_S_CUM_WEIGHTS_NEW: Tuple[float, ...] = _cumulative_weights(_S_WEIGHTS_NEW)
+
+_TI_CNOT_CX_WEIGHTS_NEW: Tuple[float, ...] = (
+    0.9996826627051202, 3.871878605024581e-07, 3.161601127623509e-05,
+    4.206004715857914e-05, 6.351519125390864e-05, 7.327011635610559e-08,
+    1.049705853823496e-05, 5.570422793171881e-08, 3.228913113600268e-05,
+    1.0495067282408066e-05, 4.837642238880724e-08, 5.537032096020189e-08,
+    0.00010518675304017205, 5.371825789052265e-08, 5.6022615262107944e-08,
+    2.094838537313598e-05,
+)
+_TI_CZ_CZ_WEIGHTS_NEW: Tuple[float, ...] = (
+    0.9996700777607745, 2.932078710313202e-07, 2.9320787104519797e-07,
+    0.00011097798700750866, 2.932078710313202e-07, 2.617988403008642e-07,
+    2.617988403078031e-07, 2.618055985753598e-07, 2.9320787108683133e-07,
+    2.617988403008642e-07, 2.617988403078031e-07, 2.6180559860311536e-07,
+    0.00011097798700754335, 2.61805598561482e-07, 2.618055985684209e-07,
+    0.00010469901597084247,
+)
+_SC_CX_WEIGHTS_NEW: Tuple[float, ...] = (
+    0.9997120035791485, 2.428535562093437e-07, 4.770600885786735e-07,
+    7.191009869316617e-05, 2.4049821617522227e-07, 2.3815435346019598e-07,
+    2.373405636916376e-05, 2.3564202483034036e-07, 4.7470405568211804e-07,
+    2.3734056369739687e-05, 2.381544111570988e-07, 2.356422783775236e-07,
+    7.143903652123695e-05, 2.3564235698825264e-07, 2.3564249961721684e-07,
+    9.432517905710175e-05,
+)
+_NA_CZ_WEIGHTS_NEW: Tuple[float, ...] = (
+    0.999724015042887, 2.0289319017235963e-07, 2.0289319017929852e-07,
+    6.748924684244623e-05, 1.5707930015734783e-07, 1.5707906874523614e-07,
+    1.5707906872441946e-07, 1.570793002059201e-07, 1.570793001851034e-07,
+    1.5707906871748056e-07, 1.5707906872441946e-07, 1.570793001989812e-07,
+    9.322047378600845e-05, 2.028931902001152e-07, 2.0289319017929852e-07,
+    0.00010251355972256543,
+)
+
+_TI_CNOT_CX_CUM_WEIGHTS_NEW: Tuple[float, ...] = _cumulative_weights(_TI_CNOT_CX_WEIGHTS_NEW)
+_TI_CZ_CZ_CUM_WEIGHTS_NEW: Tuple[float, ...] = _cumulative_weights(_TI_CZ_CZ_WEIGHTS_NEW)
+_SC_CX_CUM_WEIGHTS_NEW: Tuple[float, ...] = _cumulative_weights(_SC_CX_WEIGHTS_NEW)
+_NA_CZ_CUM_WEIGHTS_NEW: Tuple[float, ...] = _cumulative_weights(_NA_CZ_WEIGHTS_NEW)
+
 # Type alias for cleaner code
 GateErrorChannelType = Dict[str, Tuple[Tuple[str, ...], Tuple[float, ...], Tuple[float, ...], int]]
 # Precomputed layer metadata type: tuple of (targets, two-qubit pairs, choices, weights, arity)
 PrecomputedLayerItemType = Tuple[List[int], Tuple[Tuple[int, int], ...], Tuple[str, ...], Tuple[float, ...], int]
 
-_GATE_ERROR_CHANNELS: Dict[str, GateErrorChannelType] = {
-    'superconducting': {
+# Supported (p_param, system_bias) combinations for each platform
+_SUPPORTED_ERROR_PARAMS: Dict[str, list[Tuple[float, float]]] = {
+    'ideal': [],
+    'superconducting': [(0.003, 10000.0), (0.0003, 100.0)],
+    'trapped_ion_cnot': [(0.003, 10000.0), (0.0003, 100.0)],
+    'trapped_ion_cz': [(0.003, 10000.0), (0.0003, 100.0)],
+    'neutral_atom': [(0.003, 10000.0), (0.0003, 100.0)],
+}
+
+_GATE_ERROR_CHANNELS: Dict[Tuple[str, float, float], GateErrorChannelType] = {
+    # p=0.003, bias=10000 (original)
+    ('superconducting', 0.003, 10000.0): {
         'CX': (_TWO_QUBIT_ERROR_CHOICES, _SC_CX_WEIGHTS, _cumulative_weights(_SC_CX_WEIGHTS), 2),
         'H': (_SINGLE_QUBIT_ERROR_CHOICES, _H_WEIGHTS, _H_CUM_WEIGHTS, 1),
         'S': (_SINGLE_QUBIT_ERROR_CHOICES, _S_WEIGHTS, _S_CUM_WEIGHTS, 1),
         'S_DAG': (_SINGLE_QUBIT_ERROR_CHOICES, _S_WEIGHTS, _S_CUM_WEIGHTS, 1),
     },
-    'trapped_ion_cnot': {
+    ('trapped_ion_cnot', 0.003, 10000.0): {
         'CX': (_TWO_QUBIT_ERROR_CHOICES, _TI_CNOT_CX_WEIGHTS, _cumulative_weights(_TI_CNOT_CX_WEIGHTS), 2),
         'H': (_SINGLE_QUBIT_ERROR_CHOICES, _H_WEIGHTS, _H_CUM_WEIGHTS, 1),
         'S': (_SINGLE_QUBIT_ERROR_CHOICES, _S_WEIGHTS, _S_CUM_WEIGHTS, 1),
         'S_DAG': (_SINGLE_QUBIT_ERROR_CHOICES, _S_WEIGHTS, _S_CUM_WEIGHTS, 1),
     },
-    'trapped_ion_cz': {
+    ('trapped_ion_cz', 0.003, 10000.0): {
         'CZ': (_TWO_QUBIT_ERROR_CHOICES, _TI_CZ_CZ_WEIGHTS, _cumulative_weights(_TI_CZ_CZ_WEIGHTS), 2),
         'H': (_SINGLE_QUBIT_ERROR_CHOICES, _H_WEIGHTS, _H_CUM_WEIGHTS, 1),
         'S': (_SINGLE_QUBIT_ERROR_CHOICES, _S_WEIGHTS, _S_CUM_WEIGHTS, 1),
         'S_DAG': (_SINGLE_QUBIT_ERROR_CHOICES, _S_WEIGHTS, _S_CUM_WEIGHTS, 1),
     },
-    'neutral_atom': {
+    ('neutral_atom', 0.003, 10000.0): {
         'CZ': (_TWO_QUBIT_ERROR_CHOICES, _NA_CZ_WEIGHTS, _cumulative_weights(_NA_CZ_WEIGHTS), 2),
         'H': (_SINGLE_QUBIT_ERROR_CHOICES, _H_WEIGHTS, _H_CUM_WEIGHTS, 1),
         'S': (_SINGLE_QUBIT_ERROR_CHOICES, _S_WEIGHTS, _S_CUM_WEIGHTS, 1),
         'S_DAG': (_SINGLE_QUBIT_ERROR_CHOICES, _S_WEIGHTS, _S_CUM_WEIGHTS, 1),
     },
-    'ideal': {},
+    # p=0.0003, bias=100 (new)
+    ('superconducting', 0.0003, 100.0): {
+        'CX': (_TWO_QUBIT_ERROR_CHOICES, _SC_CX_WEIGHTS_NEW, _SC_CX_CUM_WEIGHTS_NEW, 2),
+        'H': (_SINGLE_QUBIT_ERROR_CHOICES, _H_WEIGHTS_NEW, _H_CUM_WEIGHTS_NEW, 1),
+        'S': (_SINGLE_QUBIT_ERROR_CHOICES, _S_WEIGHTS_NEW, _S_CUM_WEIGHTS_NEW, 1),
+        'S_DAG': (_SINGLE_QUBIT_ERROR_CHOICES, _S_WEIGHTS_NEW, _S_CUM_WEIGHTS_NEW, 1),
+    },
+    ('trapped_ion_cnot', 0.0003, 100.0): {
+        'CX': (_TWO_QUBIT_ERROR_CHOICES, _TI_CNOT_CX_WEIGHTS_NEW, _TI_CNOT_CX_CUM_WEIGHTS_NEW, 2),
+        'H': (_SINGLE_QUBIT_ERROR_CHOICES, _H_WEIGHTS_NEW, _H_CUM_WEIGHTS_NEW, 1),
+        'S': (_SINGLE_QUBIT_ERROR_CHOICES, _S_WEIGHTS_NEW, _S_CUM_WEIGHTS_NEW, 1),
+        'S_DAG': (_SINGLE_QUBIT_ERROR_CHOICES, _S_WEIGHTS_NEW, _S_CUM_WEIGHTS_NEW, 1),
+    },
+    ('trapped_ion_cz', 0.0003, 100.0): {
+        'CZ': (_TWO_QUBIT_ERROR_CHOICES, _TI_CZ_CZ_WEIGHTS_NEW, _TI_CZ_CZ_CUM_WEIGHTS_NEW, 2),
+        'H': (_SINGLE_QUBIT_ERROR_CHOICES, _H_WEIGHTS_NEW, _H_CUM_WEIGHTS_NEW, 1),
+        'S': (_SINGLE_QUBIT_ERROR_CHOICES, _S_WEIGHTS_NEW, _S_CUM_WEIGHTS_NEW, 1),
+        'S_DAG': (_SINGLE_QUBIT_ERROR_CHOICES, _S_WEIGHTS_NEW, _S_CUM_WEIGHTS_NEW, 1),
+    },
+    ('neutral_atom', 0.0003, 100.0): {
+        'CZ': (_TWO_QUBIT_ERROR_CHOICES, _NA_CZ_WEIGHTS_NEW, _NA_CZ_CUM_WEIGHTS_NEW, 2),
+        'H': (_SINGLE_QUBIT_ERROR_CHOICES, _H_WEIGHTS_NEW, _H_CUM_WEIGHTS_NEW, 1),
+        'S': (_SINGLE_QUBIT_ERROR_CHOICES, _S_WEIGHTS_NEW, _S_CUM_WEIGHTS_NEW, 1),
+        'S_DAG': (_SINGLE_QUBIT_ERROR_CHOICES, _S_WEIGHTS_NEW, _S_CUM_WEIGHTS_NEW, 1),
+    },
+    ('ideal', 0.003, 10000.0): {},
+    ('ideal', 0.0003, 100.0): {},
 }
 
 def _get_unsupported_gate_error_message(gate_name: str, platform: str) -> str:
@@ -129,17 +219,46 @@ def _get_unsupported_gate_error_message(gate_name: str, platform: str) -> str:
     platform_names = {
         'superconducting': 'superconducting',
         'trapped_ion_cnot': 'trapped ion',
-        'trapped_ion_cz': 'trapped ion_cz',
+        'trapped_ion_cz': 'trapped ion CZ',
         'neutral_atom': 'neutral atom',
     }
     platform_label = platform_names.get(platform, platform)
     return f"Unsupported gate {gate_name} for {platform_label} platform."
 
-def _get_platform_channels(qubit_platform: str) -> Optional[GateErrorChannelType]:
-    """Get gate error channels for a platform, or None if platform is 'ideal'."""
+def _validate_error_params(qubit_platform: str, p_param: float, system_bias: float) -> None:
+    """Validate that (p_param, system_bias) is supported for the given platform.
+    
+    Raises:
+        ValueError: If the combination is not supported.
+    """
+    if qubit_platform == 'ideal':
+        return
+    
+    supported = _SUPPORTED_ERROR_PARAMS.get(qubit_platform, [])
+    if (p_param, system_bias) not in supported:
+        raise ValueError(
+            f"Error channels for p={p_param}, bias={system_bias} "
+            f"have not been implemented for platform '{qubit_platform}'. "
+            f"Supported combinations: {supported}"
+        )
+
+def _get_platform_channels(
+    qubit_platform: str, p_param: float, system_bias: float
+) -> Optional[GateErrorChannelType]:
+    """Get gate error channels for a platform with specific error parameters.
+    
+    Returns None if platform is 'ideal', otherwise returns the channel dict.
+    
+    Raises:
+        ValueError: If the (p_param, system_bias) combination is not supported.
+    """
     if qubit_platform == 'ideal':
         return None
-    platform_channels = _GATE_ERROR_CHANNELS.get(qubit_platform)
+    
+    _validate_error_params(qubit_platform, p_param, system_bias)
+    
+    key = (qubit_platform, p_param, system_bias)
+    platform_channels = _GATE_ERROR_CHANNELS.get(key)
     if platform_channels is None:
         raise ValueError(f"Unsupported qubit platform: {qubit_platform}")
     return platform_channels
@@ -222,6 +341,8 @@ def apply_gate_error_channel(
     targets: List[int],
     identity: str,
     qubit_platform: str,
+    p_param: float = 0.003,
+    system_bias: float = 10000.0,
 ) -> PauliString:
     """
     Applies a hardware-specific gate error channel to a Pauli string.
@@ -246,17 +367,20 @@ def apply_gate_error_channel(
         qubit_platform: Hardware platform that determines which noise model to
             use. Supported values: 'superconducting', 'trapped_ion_cnot',
             'trapped_ion_cz', 'neutral_atom', 'ideal'.
+        p_param: Error parameter (default 0.003 for original channels).
+        system_bias: Bias parameter (default 10000.0 for original channels).
 
     Returns:
         The modified Pauli string after the gate's error channel has been applied.
 
     Raises:
-        ValueError: If gate_name is not supported for the given qubit_platform.
+        ValueError: If gate_name is not supported for the given qubit_platform
+            or if (p_param, system_bias) is not implemented for the platform.
     """
     if qubit_platform == 'ideal':
         return pauli
 
-    platform_channels = _get_platform_channels(qubit_platform)
+    platform_channels = _get_platform_channels(qubit_platform, p_param, system_bias)
     # Type guard: guaranteed non-None after _get_platform_channels() for non-ideal
     assert platform_channels is not None
 
@@ -583,7 +707,7 @@ def get_pauli_string(
     )
     # Precompute metadata for each layer
     precomputed_layers: List[List[PrecomputedLayerItemType]] = []
-    platform_channels = _get_platform_channels(qubit_platform)
+    platform_channels = _get_platform_channels(qubit_platform, p, system_bias)
     for layer_ops, _ in gate_layers:
         layer_meta: List[PrecomputedLayerItemType] = []
         if platform_channels is not None:
@@ -913,6 +1037,9 @@ def error_propagation_simulation(
             "convergence_mode must be one of: 'max_xyz', 'bias', 'combined'. "
             f"Got: {convergence_mode}"
         )
+
+    # Validate error parameters for the given platform
+    _validate_error_params(qubit_platform, p_param, system_bias)
 
     # Extract all used qubits from gate sequence
     all_used_qubits_set: set[int] = set()

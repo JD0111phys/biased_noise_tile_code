@@ -2,6 +2,8 @@ README.md
 pyproject.toml
 pauli_distribution/__init__.py
 pauli_distribution/pauli_strings.py
+pauli_distribution/plot_convergence_file.py
+pauli_distribution/plot_progress_file.py
 pauli_distribution.egg-info/PKG-INFO
 pauli_distribution.egg-info/SOURCES.txt
 pauli_distribution.egg-info/dependency_links.txt

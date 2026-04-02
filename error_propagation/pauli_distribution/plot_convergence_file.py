@@ -192,6 +192,57 @@ def _has_finite(values: List[float]) -> bool:
     return any(math.isfinite(v) for v in values)
 
 
+def _compute_convergence_from_stats(
+    count_stats: List[Tuple[float, float, float, float, float, float, float, float]],
+) -> Tuple[List[float], List[float], List[float], List[float]]:
+    """Compute convergence (absolute change) from count statistics.
+    
+    Takes probabilities from consecutive count snapshots and computes
+    the absolute change in each Pauli probability.
+    
+    Args:
+        count_stats: List of (p_x, p_y, p_z, bias, se_x, se_y, se_z, se_bias) tuples.
+    
+    Returns:
+        Tuple of (x_conv, y_conv, z_conv, bias_conv) lists.
+    """
+    x_conv: List[float] = [math.nan]  # First point has no previous value
+    y_conv: List[float] = [math.nan]
+    z_conv: List[float] = [math.nan]
+    bias_conv: List[float] = [math.nan]
+    
+    for i in range(1, len(count_stats)):
+        current = count_stats[i]
+        previous = count_stats[i - 1]
+        
+        # Current values: (p_x, p_y, p_z, bias, se_x, se_y, se_z, se_bias)
+        c_x, c_y, c_z, c_bias = current[0], current[1], current[2], current[3]
+        p_x, p_y, p_z, p_bias = previous[0], previous[1], previous[2], previous[3]
+        
+        # Convergence is absolute change
+        if math.isfinite(c_x) and math.isfinite(p_x):
+            x_conv.append(abs(c_x - p_x))
+        else:
+            x_conv.append(math.nan)
+        
+        if math.isfinite(c_y) and math.isfinite(p_y):
+            y_conv.append(abs(c_y - p_y))
+        else:
+            y_conv.append(math.nan)
+        
+        if math.isfinite(c_z) and math.isfinite(p_z):
+            z_conv.append(abs(c_z - p_z))
+        else:
+            z_conv.append(math.nan)
+        
+        if math.isfinite(c_bias) and math.isfinite(p_bias):
+            bias_conv.append(abs(c_bias - p_bias))
+        else:
+            bias_conv.append(math.nan)
+    
+    return x_conv, y_conv, z_conv, bias_conv
+
+
 def _parse_counts_stats(counts_file: Path) -> List[Tuple[float, float, float, float, float, float, float, float]]:
     """Parse cumulative count rows into probabilities and standard errors.
 
@@ -432,6 +483,20 @@ def plot_convergence_file(
             count_stats,
             error_z,
         )
+
+    # If convergence not computed in progress file, try to compute from counts
+    if (not _has_finite(x_conv)) and counts_file is not None:
+        if counts_file.exists() and not counts_file.is_dir():
+            count_stats_all = _parse_counts_stats(counts_file)
+            if len(count_stats_all) >= len(all_iterations):
+                if len(count_stats_all) > len(all_iterations):
+                    # Older runs may contain one or more extra trailing count rows.
+                    aligned_count_stats_all = count_stats_all[-len(all_iterations):]
+                else:
+                    aligned_count_stats_all = count_stats_all
+                count_stats_selected = [aligned_count_stats_all[idx] for idx in selected_indices]
+                # Compute convergence from counts statistics
+                x_conv, y_conv, z_conv, bias_conv = _compute_convergence_from_stats(count_stats_selected)
 
     fig, axes = plt.subplots(2, 2, figsize=(12, 8), sharex=True)
     ax_x, ax_y, ax_z, ax_fourth = axes.ravel()

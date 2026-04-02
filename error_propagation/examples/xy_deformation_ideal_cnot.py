@@ -29,8 +29,8 @@ gate_tile_XY = [
 chosen_seed = 2200001
 converted_gate_sequence = convert_gate_sequence(gate_tile_XY, "CNOT_native")
 platform = "ideal"
-bias_sys = 10000.0
-prob = 0.003
+bias_sys = 100.0
+prob = 0.0003
 samples_per_iteration = 100000
 total_samples = 200_000_000
 

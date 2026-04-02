@@ -34,8 +34,8 @@ gate_tile_middle = [
 
 chosen_seed = 1700001
 platform = "ideal"
-bias_sys = 10000.0
-prob = 0.003
+bias_sys = 100.0
+prob = 0.0003
 samples_per_iteration = 100000
 total_samples = 200_000_000
 
