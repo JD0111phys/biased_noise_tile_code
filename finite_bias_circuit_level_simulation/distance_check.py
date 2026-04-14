@@ -4,13 +4,11 @@
 import numpy as np
 from codedistance import *
 
-CircuitFile = "/Users/sayandipdhara/Desktop/Biased_noise_codes/biased_noise_tile_code/finite_bias_circuit_level_simulation/circuit_8_rounds.stim"
-# CircuitFile = "stim_circuits/02_surface_code_trans_cx_circuits/01_r=3,d=3,p=0.009,noise=si1000,c=surface_code_trans_cx_magicEPR,q=36,gates=cz.stim"
-# CircuitFile = "stim_circuits/03_colorcodes_midout/01_r=3,d=3,p=0.0005,noise=uniform,c=midout_color_code_Z,q=9,gates=all.stim"
-# CircuitFile = "stim_circuits/04_colorcodes_superdense/01_r=3,d=3,p=0.0005,noise=uniform,c=superdense_color_code_Z,q=13,gates=all.stim"
-# CircuitFile = "stim_circuits/05_bivariatebicyclecodes/01_r=6,d=6,p=0.009,noise=si1000,c=bivariate_bicycle_Z,nkd=[[72,12,6]],q=144,iscolored=True,A_poly=x^3+y+y^2,B_poly=y^3+x+x^2.stim"
-# CircuitFile = "stim_circuits/06_bivariatebicyclecodes_nlr5wb/01_r=6,d=6,p=0.009,noise=nlr5wb,c=bivariate_bicycle_Z,k=12,q=144,iscolored=True,A_poly=x^3+y+y^2,B_poly=y^3+x+x^2.stim"
-# CircuitFile = "stim_circuits/07_bivariatebicyclecodes_nlr10wb/01_r=6,d=6,p=0.009,noise=nlr10wb,c=bivariate_bicycle_Z,k=12,q=144,iscolored=True,A_poly=x^3+y+y^2,B_poly=y^3+x+x^2.stim"
+import sys
+if len(sys.argv) > 1:
+    CircuitFile = sys.argv[1]
+else:
+    CircuitFile = "/Users/sayandipdhara/Desktop/Biased_noise_codes/biased_noise_tile_code/finite_bias_circuit_level_simulation/circuit_8_rounds.stim"
 
 qc = stim.Circuit.from_file(CircuitFile)
 
@@ -106,13 +104,7 @@ params["osd_order"] = 1
 #               'qubitSerfMM',
 #               ]
 
-# allMethods = [
-#   'UndetectableErrorStim',
-#   'ColourCodeDistStim',
-#   'decoderDist',
-#   'MIPDist',
-#   'pySATDist',
-# ]
+allMethods = ['QDistEvol']
 
 ## Single Method
 methods = [method]
@@ -123,11 +115,11 @@ startTimer()
 for method in methods:
     print(method)
     res = circuitDistance(qc,method=method,params=params,seed=0)
-    print(f'Calculated distance: {res['d']}')
-    print(f'Time Taken: {elapsedTime()}')
+    print(f"Calculated distance: {res['d']}")
+    print(f"Time Taken: {elapsedTime()}")
     if (res['T'] > 1):
-        print(f'Total Trials: {res['T']}')
-        print(f'Trials at d={res['d']}: {res['R']}')
+        print(f"Total Trials: {res['T']}")
+        print(f"Trials at d={res['d']}: {res['R']}")
     lo = res['L']
     if (np.sum(lo)) > 0:
         # r1,V = HowRes(Hz,lo,2)

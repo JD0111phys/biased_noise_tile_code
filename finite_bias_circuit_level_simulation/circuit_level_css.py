@@ -434,16 +434,12 @@ def generate_tile_code_circuit(
         1 + 8 + 2j,
     ]
     z_order: List[complex] = [
-        
-        -1 + 2 + 8j,
+        1 + 8j,
         -1 + 2j,
-        
-        -1 + 6 + 0j,
-      
-        -1 + 0 + 6j,
-         -1 + 10 + 0j,
-         -1 + 8 + 10j,
-        
+        5 + 0j,
+        -1 + 6j,
+        9 + 0j,
+        7 + 10j,
     ]
 
 

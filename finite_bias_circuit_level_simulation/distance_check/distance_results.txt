@@ -1,0 +1,56 @@
+=== distance_check/circuit_css_l6_m6.stim ===
+QDistEvol
+DEM dimensions (288, 2160)
+LOcheck w:4 lo: 926 929 953 1290
+Satisfies Checks True
+Anticommutes with a logical True
+Calculated distance: 4
+Time Taken: 1.5908307089703158
+Total Trials: 100
+Trials at d=4: 62
+lo: [926, 929, 953, 1290]
+###########################################
+
+
+=== distance_check/circuit_linear_l6_m6.stim ===
+QDistEvol
+DEM dimensions (288, 2160)
+LOcheck w:4 lo: 926 929 953 1290
+Satisfies Checks True
+Anticommutes with a logical True
+Calculated distance: 4
+Time Taken: 1.6456980839720927
+Total Trials: 100
+Trials at d=4: 62
+lo: [926, 929, 953, 1290]
+###########################################
+
+
+=== distance_check/circuit_ti_l6_m6.stim ===
+QDistEvol
+DEM dimensions (288, 2160)
+LOcheck w:4 lo: 926 929 953 1290
+Satisfies Checks True
+Anticommutes with a logical True
+Calculated distance: 4
+Time Taken: 1.5888629999826662
+Total Trials: 100
+Trials at d=4: 62
+lo: [926, 929, 953, 1290]
+###########################################
+
+
+=== distance_check/circuit_xy_l6_m6.stim ===
+QDistEvol
+DEM dimensions (288, 2160)
+LOcheck w:4 lo: 926 929 953 1290
+Satisfies Checks True
+Anticommutes with a logical True
+Calculated distance: 4
+Time Taken: 1.6247980840271339
+Total Trials: 100
+Trials at d=4: 62
+lo: [926, 929, 953, 1290]
+###########################################
+
+
