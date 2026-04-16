@@ -1,18 +1,3 @@
-"""Plot convergence metrics from an effective_probs progress file.
-
-This script reads the text file produced by `error_propagation_simulation`
-(`effective_probs_<platform>_<timestamp>.txt`) and plots four curves versus
-iteration:
-- X probability
-- Y probability
-- Z probability
-- Bias
-
-Example:
-    python -m pauli_distribution.plot_progress_file \
-        --progress-file effective_probs_superconducting_20260329.txt
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -20,7 +5,7 @@ import csv
 import math
 import json
 from pathlib import Path
-from typing import Any, List, Optional, Tuple
+from typing import Any, List, Optional, Tuple, Dict
 
 import matplotlib.pyplot as plt
 
@@ -56,7 +41,6 @@ def _parse_progress_file(
                 if len(row) >= 13 and row[12].strip() != "":
                     sample_value = int(row[12])
             except ValueError:
-                # Skip malformed or non-numeric data rows.
                 continue
 
             iterations.append(iteration)
@@ -80,6 +64,8 @@ def _build_output_path_with_flags(
     bias_log_scale: bool,
     x_axis: str,
     manual_sigfig: int | None = None,
+    zk_tail_start: int | None = None,
+    zk_rescale_tail: bool = False,
 ) -> Path:
     stem = progress_file.stem
     parts = ["plots"]
@@ -95,6 +81,10 @@ def _build_output_path_with_flags(
         parts.append("x_samples")
     if manual_sigfig is not None:
         parts.append(f"sigfig{manual_sigfig}")
+    if zk_tail_start is not None:
+        parts.append(f"zktail_{zk_tail_start}")
+    if zk_rescale_tail:
+        parts.append("zkrescaled")
     suffix = "_".join(parts)
     return progress_file.with_name(f"{stem}_{suffix}.svg")
 
@@ -142,7 +132,6 @@ def _parse_counts_totals(counts_file: Path) -> List[int]:
             else:
                 counts_obj = data
             if not all(str(pauli_type) in counts_obj or pauli_type in counts_obj for pauli_type in (0, 1, 2, 3)):
-                # Skip metadata rows that do not carry Pauli counts.
                 continue
             try:
                 total = 0
@@ -156,40 +145,6 @@ def _parse_counts_totals(counts_file: Path) -> List[int]:
     return totals
 
 
-def _parse_counts_cumulative(counts_file: Path) -> List[Tuple[int, int, int, int]]:
-    """Parse cumulative (I, X, Y, Z) counts per JSONL row."""
-    cumulative: List[Tuple[int, int, int, int]] = []
-    with counts_file.open("r", encoding="utf-8") as f:
-        for raw_line in f:
-            stripped = raw_line.strip()
-            if not stripped:
-                continue
-            try:
-                data = json.loads(stripped)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(data, dict):
-                continue
-            if "counts" in data and isinstance(data["counts"], dict):
-                counts_obj = data["counts"]
-            else:
-                counts_obj = data
-            if not all(str(pauli_type) in counts_obj or pauli_type in counts_obj for pauli_type in (0, 1, 2, 3)):
-                # Skip metadata rows that do not carry Pauli counts.
-                continue
-            try:
-                c_i = int(counts_obj.get("0", counts_obj.get(0, 0)))
-                c_x = int(counts_obj.get("1", counts_obj.get(1, 0)))
-                c_y = int(counts_obj.get("2", counts_obj.get(2, 0)))
-                c_z = int(counts_obj.get("3", counts_obj.get(3, 0)))
-            except (TypeError, ValueError):
-                continue
-            cumulative.append((c_i, c_x, c_y, c_z))
-    if not cumulative:
-        raise ValueError(f"No valid cumulative count rows parsed from: {counts_file}")
-    return cumulative
-
-
 def _align_counts_to_progress_length(rows: List[Any], progress_len: int, label: str) -> List[Any]:
     """Align counts-derived rows to progress rows by tail-trimming extras."""
     if len(rows) < progress_len:
@@ -200,147 +155,6 @@ def _align_counts_to_progress_length(rows: List[Any], progress_len: int, label: 
     if len(rows) > progress_len:
         return rows[-progress_len:]
     return rows
-
-
-def _linear_slope_ci(
-    x_values: List[int],
-    y_values: List[float],
-    z_score: float,
-) -> Tuple[float, float, float]:
-    """Compute OLS slope and normal CI for slope."""
-    n = len(x_values)
-    if n < 3:
-        return math.nan, math.nan, math.nan
-
-    x_mean = sum(x_values) / n
-    y_mean = sum(y_values) / n
-    s_xx = sum((x - x_mean) ** 2 for x in x_values)
-    if s_xx <= 0.0:
-        return math.nan, math.nan, math.nan
-
-    s_xy = sum((x - x_mean) * (y - y_mean) for x, y in zip(x_values, y_values))
-    slope = s_xy / s_xx
-    intercept = y_mean - slope * x_mean
-    residual_ss = sum((y - (intercept + slope * x)) ** 2 for x, y in zip(x_values, y_values))
-    dof = n - 2
-    if dof <= 0:
-        return slope, math.nan, math.nan
-    sigma2 = residual_ss / dof
-    se_slope = math.sqrt(max(0.0, sigma2 / s_xx))
-    return slope, slope - z_score * se_slope, slope + z_score * se_slope
-
-
-def _window_summary_from_delta_counts(
-    cumulative_counts: List[Tuple[int, int, int, int]],
-    start_index: int,
-    end_index: int,
-    z_score: float,
-) -> dict[str, float]:
-    """Estimate window statistics from independent count increments."""
-    start_base = cumulative_counts[start_index - 1] if start_index > 0 else (0, 0, 0, 0)
-    end_counts = cumulative_counts[end_index]
-    d_i = end_counts[0] - start_base[0]
-    d_x = end_counts[1] - start_base[1]
-    d_y = end_counts[2] - start_base[2]
-    d_z = end_counts[3] - start_base[3]
-    n_window = d_i + d_x + d_y + d_z
-    if n_window <= 0:
-        nan_stats = {
-            "n_window": 0.0,
-            "x": math.nan,
-            "x_low": math.nan,
-            "x_high": math.nan,
-            "y": math.nan,
-            "y_low": math.nan,
-            "y_high": math.nan,
-            "z": math.nan,
-            "z_low": math.nan,
-            "z_high": math.nan,
-            "i": math.nan,
-            "i_low": math.nan,
-            "i_high": math.nan,
-            "bias": math.nan,
-            "bias_low": math.nan,
-            "bias_high": math.nan,
-            "x_se": math.nan,
-            "y_se": math.nan,
-            "z_se": math.nan,
-            "bias_se": math.nan,
-        }
-        return nan_stats
-
-    n = float(n_window)
-    p_x = d_x / n
-    p_y = d_y / n
-    p_z = d_z / n
-    p_i = d_i / n
-    s_xy = p_x + p_y
-    bias = p_z / s_xy if s_xy > 0.0 else math.inf
-
-    se_x = math.sqrt(max(0.0, p_x * (1.0 - p_x) / n))
-    se_y = math.sqrt(max(0.0, p_y * (1.0 - p_y) / n))
-    se_z = math.sqrt(max(0.0, p_z * (1.0 - p_z) / n))
-    se_i = math.sqrt(max(0.0, p_i * (1.0 - p_i) / n))
-
-    if s_xy > 0.0 and math.isfinite(bias):
-        var_bias = p_z * (p_z + s_xy) / (n * (s_xy ** 3))
-        se_bias = math.sqrt(max(0.0, var_bias))
-    else:
-        se_bias = math.nan
-
-    return {
-        "n_window": float(n_window),
-        "x": p_x,
-        "x_low": max(0.0, p_x - z_score * se_x),
-        "x_high": min(1.0, p_x + z_score * se_x),
-        "y": p_y,
-        "y_low": max(0.0, p_y - z_score * se_y),
-        "y_high": min(1.0, p_y + z_score * se_y),
-        "z": p_z,
-        "z_low": max(0.0, p_z - z_score * se_z),
-        "z_high": min(1.0, p_z + z_score * se_z),
-        "i": p_i,
-        "i_low": max(0.0, p_i - z_score * se_i),
-        "i_high": min(1.0, p_i + z_score * se_i),
-        "bias": bias,
-        "bias_low": (max(0.0, bias - z_score * se_bias) if math.isfinite(se_bias) else math.nan),
-        "bias_high": (bias + z_score * se_bias if math.isfinite(se_bias) else math.nan),
-        "x_se": se_x,
-        "y_se": se_y,
-        "z_se": se_z,
-        "bias_se": se_bias,
-    }
-
-
-def _difference_ci(
-    first_value: float,
-    first_se: float,
-    second_value: float,
-    second_se: float,
-    z_score: float,
-) -> Tuple[float, float, float]:
-    """Compute (second - first) estimate with normal CI from independent SEs."""
-    if not (math.isfinite(first_value) and math.isfinite(second_value) and math.isfinite(first_se) and math.isfinite(second_se)):
-        return math.nan, math.nan, math.nan
-    delta = second_value - first_value
-    delta_se = math.sqrt(max(0.0, first_se * first_se + second_se * second_se))
-    return delta, delta - z_score * delta_se, delta + z_score * delta_se
-
-
-def _round_to_ci_precision(value: float, low: float, high: float) -> float:
-    """Round a value to the precision implied by CI half-width."""
-    if not (math.isfinite(value) and math.isfinite(low) and math.isfinite(high)):
-        return value
-    half_width = abs(high - low) / 2.0
-    if half_width <= 0.0 or not math.isfinite(half_width):
-        return value
-    decimals = int(-math.floor(math.log10(half_width)))
-    return round(value, decimals)
-
-
-def _quantize_series_from_ci(values: List[float], lows: List[float], highs: List[float]) -> List[float]:
-    """Quantize each point using its own CI-derived precision."""
-    return [_round_to_ci_precision(v, lo, hi) for v, lo, hi in zip(values, lows, highs)]
 
 
 def _round_to_n_sigfigs(value: float, n_sigfigs: int) -> float:
@@ -414,6 +228,114 @@ def _compute_probability_cis(
     return x_low, x_high, y_low, y_high, z_low, z_high, b_low, b_high
 
 
+def _compute_bias_se_and_rk(
+    x_probs: List[float],
+    y_probs: List[float],
+    z_probs: List[float],
+    bias_values: List[float],
+    totals: List[int],
+) -> Tuple[List[float], List[float], List[float]]:
+    """Compute SE of bias, R_k metric, and relative precision for each iteration."""
+    se_bias_list: List[float] = []
+    rk_list: List[float] = []
+    rel_precision_list: List[float] = []
+
+    for idx, (x_prob, y_prob, z_prob, bias_value, total) in enumerate(
+        zip(x_probs, y_probs, z_probs, bias_values, totals)
+    ):
+        n = float(total)
+        if n <= 0.0:
+            se_bias_list.append(math.nan)
+            rk_list.append(math.nan)
+            rel_precision_list.append(math.nan)
+            continue
+
+        s_xy = x_prob + y_prob
+        if s_xy <= 0.0 or not math.isfinite(bias_value):
+            se_bias_list.append(math.nan)
+            rk_list.append(math.nan)
+            rel_precision_list.append(math.nan)
+            continue
+
+        var_bias = z_prob * (z_prob + s_xy) / (n * (s_xy ** 3))
+        se_bias = math.sqrt(max(0.0, var_bias))
+        se_bias_list.append(se_bias)
+
+        if math.isfinite(bias_value) and bias_value != 0.0:
+            rel_precision_list.append(se_bias / abs(bias_value))
+        else:
+            rel_precision_list.append(math.nan)
+
+        if idx == 0:
+            rk_list.append(math.nan)
+        else:
+            prev_bias = bias_values[idx - 1]
+            if math.isfinite(prev_bias) and se_bias > 0.0:
+                rk_list.append(abs(bias_value - prev_bias) / se_bias)
+            else:
+                rk_list.append(math.nan)
+
+    return se_bias_list, rk_list, rel_precision_list
+
+
+def _compute_bias_difference_zk(
+    x_probs: List[float],
+    y_probs: List[float],
+    z_probs: List[float],
+    bias_values: List[float],
+    totals: List[int],
+) -> Tuple[List[float], List[float], List[float]]:
+    """Compute Z_k metric: normalized bias difference with directional information."""
+    zk_list: List[float] = []
+    abs_zk_list: List[float] = []
+    se_d_list: List[float] = []
+    zk_rescaled_list: List[float] = []
+    abs_zk_rescaled_list: List[float] = []
+    zk_rescale_factor: float = math.nan
+
+    for idx, (x_prob, y_prob, z_prob, bias_value, total) in enumerate(
+        zip(x_probs, y_probs, z_probs, bias_values, totals)
+    ):
+        if idx == 0:
+            zk_list.append(math.nan)
+            abs_zk_list.append(math.nan)
+            se_d_list.append(math.nan)
+            continue
+
+        prev_bias = bias_values[idx - 1]
+        n_k_minus_1 = float(totals[idx - 1])
+        n_k = float(total)
+        s_k = x_prob + y_prob
+
+        if s_k <= 0.0 or not math.isfinite(bias_value) or not math.isfinite(prev_bias):
+            zk_list.append(math.nan)
+            abs_zk_list.append(math.nan)
+            se_d_list.append(math.nan)
+            continue
+
+        if n_k_minus_1 <= 0.0 or n_k <= 0.0 or n_k <= n_k_minus_1:
+            zk_list.append(math.nan)
+            abs_zk_list.append(math.nan)
+            se_d_list.append(math.nan)
+            continue
+
+        d_k = bias_value - prev_bias
+        var_factor = z_prob * (z_prob + s_k) / (s_k ** 3)
+        var_d = max(0.0, var_factor * (1.0 / n_k_minus_1 - 1.0 / n_k))
+        se_d = math.sqrt(var_d)
+        se_d_list.append(se_d)
+
+        if se_d > 0.0:
+            z_k = d_k / se_d
+            zk_list.append(z_k)
+            abs_zk_list.append(abs(z_k))
+        else:
+            zk_list.append(math.nan)
+            abs_zk_list.append(math.nan)
+
+    return zk_list, abs_zk_list, se_d_list
+
+
 def _filter_iteration_range(
     iterations: List[int],
     generated_samples: List[Optional[int]],
@@ -455,6 +377,216 @@ def _filter_iteration_range(
     return filtered_iterations, filtered_samples, filtered_x, filtered_y, filtered_z, filtered_bias
 
 
+def _summarize_zk_tail(
+    iterations: List[int],
+    zk_list: List[float],
+    tail_start: int | None = None,
+) -> Dict[str, float]:
+    """Summarize the tail behavior of the Z_k sequence."""
+    pairs = [
+        (it, z)
+        for it, z in zip(iterations, zk_list)
+        if math.isfinite(z) and (tail_start is None or it >= tail_start)
+    ]
+    if len(pairs) < 2:
+        return {}
+
+    z = [val for _, val in pairs]
+    m = len(z)
+
+    mean_z = sum(z) / m
+    var_z = sum((v - mean_z) ** 2 for v in z) / (m - 1)
+    std_z = math.sqrt(var_z)
+
+    mean_se = std_z / math.sqrt(m) if std_z > 0.0 else math.nan
+    mean_t = mean_z / mean_se if math.isfinite(mean_se) and mean_se > 0.0 else math.nan
+
+    frac_abs_gt_2 = sum(abs(v) > 2.0 for v in z) / m
+    frac_abs_gt_3 = sum(abs(v) > 3.0 for v in z) / m
+
+    n_pos = sum(v > 0 for v in z)
+    n_neg = sum(v < 0 for v in z)
+    sign_total = n_pos + n_neg
+    sign_imbalance = ((n_pos - n_neg) / sign_total) if sign_total > 0 else math.nan
+
+    longest_run = 0
+    current_run = 0
+    prev_sign = 0
+    for v in z:
+        sign = 1 if v > 0 else (-1 if v < 0 else 0)
+        if sign == 0:
+            current_run = 0
+            prev_sign = 0
+            continue
+        if sign == prev_sign:
+            current_run += 1
+        else:
+            current_run = 1
+            prev_sign = sign
+        longest_run = max(longest_run, current_run)
+
+    z0 = z[:-1]
+    z1 = z[1:]
+    mean0 = sum(z0) / len(z0)
+    mean1 = sum(z1) / len(z1)
+    num = sum((a - mean0) * (b - mean1) for a, b in zip(z0, z1))
+    den0 = sum((a - mean0) ** 2 for a in z0)
+    den1 = sum((b - mean1) ** 2 for b in z1)
+    lag1_autocorr = num / math.sqrt(den0 * den1) if den0 > 0.0 and den1 > 0.0 else math.nan
+
+    return {
+        "count": float(m),
+        "mean_z": mean_z,
+        "std_z": std_z,
+        "mean_se": mean_se,
+        "mean_t": mean_t,
+        "frac_abs_gt_2": frac_abs_gt_2,
+        "frac_abs_gt_3": frac_abs_gt_3,
+        "sign_imbalance": sign_imbalance,
+        "longest_sign_run": float(longest_run),
+        "lag1_autocorr": lag1_autocorr,
+    }
+
+
+def _print_zk_summary(summary: Dict[str, float], tail_start: int | None) -> None:
+    if not summary:
+        print("Z_k tail summary: insufficient finite points to summarize.")
+        return
+    start_label = "all finite iterations" if tail_start is None else f"iterations >= {tail_start}"
+    print(f"Z_k tail summary ({start_label}):")
+    order = [
+        "count",
+        "mean_z",
+        "std_z",
+        "mean_se",
+        "mean_t",
+        "frac_abs_gt_2",
+        "frac_abs_gt_3",
+        "sign_imbalance",
+        "longest_sign_run",
+        "lag1_autocorr",
+    ]
+    for key in order:
+        value = summary.get(key, math.nan)
+        if key in {"count", "longest_sign_run"}:
+            print(f"  {key}: {int(value)}")
+        else:
+            print(f"  {key}: {value:.6g}")
+
+
+
+
+def _summarize_bias_plateau_tail(
+    iterations: List[int],
+    bias_values: List[float],
+    tail_start: int | None = None,
+    n_blocks: int = 5,
+) -> Dict[str, Any]:
+    """Summarize tail plateau behavior of running bias using block medians.
+
+    The tail is split into consecutive blocks of nearly equal size. We compute
+    a robust representative (median) for each block, then measure the relative
+    spread across block medians and the relative difference between the final
+    two blocks.
+    """
+    pairs = [
+        (it, b)
+        for it, b in zip(iterations, bias_values)
+        if math.isfinite(b) and (tail_start is None or it >= tail_start)
+    ]
+    if len(pairs) < max(2, n_blocks):
+        return {}
+
+    n = len(pairs)
+    n_blocks = max(2, min(n_blocks, n))
+
+    def _median(vals: List[float]) -> float:
+        vals = sorted(vals)
+        m = len(vals)
+        if m % 2 == 1:
+            return vals[m // 2]
+        return 0.5 * (vals[m // 2 - 1] + vals[m // 2])
+
+    block_ranges: List[Tuple[int, int]] = []
+    block_medians: List[float] = []
+    block_first_last: List[Tuple[float, float]] = []
+
+    for j in range(n_blocks):
+        start = (j * n) // n_blocks
+        end = ((j + 1) * n) // n_blocks
+        block = pairs[start:end]
+        if not block:
+            continue
+        its = [it for it, _ in block]
+        vals = [b for _, b in block]
+        block_ranges.append((its[0], its[-1]))
+        block_medians.append(_median(vals))
+        block_first_last.append((vals[0], vals[-1]))
+
+    if len(block_medians) < 2:
+        return {}
+
+    final_median = block_medians[-1]
+    if not math.isfinite(final_median) or final_median == 0.0:
+        return {}
+
+    plateau_spread_rel = (max(block_medians) - min(block_medians)) / abs(final_median)
+    last_prev_rel_diff = abs(block_medians[-1] - block_medians[-2]) / abs(final_median)
+    tail_first = pairs[0][1]
+    tail_last = pairs[-1][1]
+    tail_endpoint_rel_drift = abs(tail_last - tail_first) / abs(final_median)
+
+    return {
+        "count": float(len(pairs)),
+        "n_blocks": float(len(block_medians)),
+        "final_median": final_median,
+        "plateau_spread_rel": plateau_spread_rel,
+        "last_prev_rel_diff": last_prev_rel_diff,
+        "tail_endpoint_rel_drift": tail_endpoint_rel_drift,
+        "block_ranges": block_ranges,
+        "block_medians": block_medians,
+        "block_first_last": block_first_last,
+    }
+
+
+def _print_bias_plateau_summary(summary: Dict[str, Any], tail_start: int | None) -> None:
+    if not summary:
+        print("Bias plateau summary: insufficient finite points to summarize.")
+        return
+    start_label = "all finite iterations" if tail_start is None else f"iterations >= {tail_start}"
+    print(f"Bias plateau summary ({start_label}):")
+    print(f"  count: {int(summary['count'])}")
+    print(f"  n_blocks: {int(summary['n_blocks'])}")
+    print(f"  final_median: {summary['final_median']:.6g}")
+    print(f"  plateau_spread_rel: {summary['plateau_spread_rel']:.6g}")
+    print(f"  last_prev_rel_diff: {summary['last_prev_rel_diff']:.6g}")
+    print(f"  tail_endpoint_rel_drift: {summary['tail_endpoint_rel_drift']:.6g}")
+    print("  block_medians:")
+    for (it0, it1), med in zip(summary['block_ranges'], summary['block_medians']):
+        print(f"    [{it0}, {it1}]: {med:.6g}")
+
+def _rescale_zk_from_tail(
+    iterations: List[int],
+    zk_list: List[float],
+    tail_start: int | None = None,
+) -> Tuple[List[float], float]:
+    """Rescale Z_k by the empirical tail standard deviation.
+
+    This is the Option B calibration:
+        Z_k^(rescaled) = Z_k / std_tail(raw Z_k)
+    where std_tail is computed over the finite tail region used for diagnostics.
+    """
+    summary = _summarize_zk_tail(iterations, zk_list, tail_start=tail_start)
+    std_tail = summary.get("std_z", math.nan)
+    if not math.isfinite(std_tail) or std_tail <= 0.0:
+        return [math.nan if not math.isfinite(z) else z for z in zk_list], math.nan
+
+    return [
+        (z / std_tail) if math.isfinite(z) else math.nan
+        for z in zk_list
+    ], std_tail
+
+
 def plot_progress_file(
     progress_file: Path,
     output_path: Path | None = None,
@@ -467,18 +599,19 @@ def plot_progress_file(
     counts_file: Path | None = None,
     error_bars: bool = False,
     error_z: float = 1.96,
-    window_summary: bool = False,
-    advanced_summary: bool = False,
-    summary_report: Path | None = None,
-    quality_check: bool = False,
-    qc_bias_conv_threshold: float = 2e-4,
-    qc_bias_ci_halfwidth: float = 1e-3,
-    qc_require_split_overlap_zero: bool = True,
-    sigfig_from_ci: bool = False,
     sigfig_overlay: bool = True,
     manual_sigfig: int | None = None,
+    rel_prec_log_scale: bool = True,
+    zk_tail_start: int | None = None,
+    print_zk_summary: bool = True,
+    show_zk_hist: bool = True,
+    zk_rescale_tail: bool = True,
+    plateau_tail_start: int | None = None,
+    plateau_blocks: int = 5,
+    print_plateau_summary: bool = True,
+    show_plateau_overlay: bool = True,
 ) -> Path:
-    """Create and save a 2x2 plot grid for X, Y, Z probabilities and bias."""
+    """Create and save a 2x4 plot grid for probabilities, bias, and diagnostics."""
     all_iterations, all_generated_samples, all_x_probs, all_y_probs, all_z_probs, all_bias_values = _parse_progress_file(progress_file)
 
     selected_indices = [
@@ -519,6 +652,8 @@ def plot_progress_file(
             bias_log_scale=bias_log_scale,
             x_axis=x_axis,
             manual_sigfig=manual_sigfig,
+            zk_tail_start=zk_tail_start,
+            zk_rescale_tail=zk_rescale_tail,
         )
     output_path = output_path.expanduser().resolve(strict=False)
 
@@ -540,13 +675,19 @@ def plot_progress_file(
 
     x_low = x_high = y_low = y_high = z_low = z_high = b_low = b_high = None
     x_sig = y_sig = z_sig = b_sig = None
-    window_stats: Optional[dict[str, float]] = None
-    advanced_stats: Optional[dict[str, float]] = None
-    summary_text: Optional[str] = None
-    if error_bars or sigfig_from_ci:
+    se_bias_list: List[float] = []
+    rk_list: List[float] = []
+    rel_precision_list: List[float] = []
+    zk_list: List[float] = []
+    abs_zk_list: List[float] = []
+    se_d_list: List[float] = []
+    zk_rescaled_list: List[float] = []
+    abs_zk_rescaled_list: List[float] = []
+    zk_rescale_factor: float = math.nan
+
+    if error_bars:
         if counts_file is None:
-            requirement = "--error-bars" if error_bars else "--sigfig-from-ci"
-            raise ValueError(f"{requirement} requires --counts-file.")
+            raise ValueError("--error-bars requires --counts-file.")
         if not counts_file.exists() or counts_file.is_dir():
             raise FileNotFoundError(f"Counts file not found or is not a file: {counts_file}")
         totals_all = _align_counts_to_progress_length(
@@ -563,11 +704,36 @@ def plot_progress_file(
             totals_filtered,
             error_z,
         )
-        if sigfig_from_ci:
-            x_sig = _quantize_series_from_ci(x_probs, x_low, x_high)
-            y_sig = _quantize_series_from_ci(y_probs, y_low, y_high)
-            z_sig = _quantize_series_from_ci(z_probs, z_low, z_high)
-            b_sig = _quantize_series_from_ci(bias_values, b_low, b_high)
+        se_bias_list, rk_list, rel_precision_list = _compute_bias_se_and_rk(
+            x_probs,
+            y_probs,
+            z_probs,
+            bias_values,
+            totals_filtered,
+        )
+        zk_list, abs_zk_list, se_d_list = _compute_bias_difference_zk(
+            x_probs,
+            y_probs,
+            z_probs,
+            bias_values,
+            totals_filtered,
+        )
+
+        if zk_rescale_tail:
+            zk_rescaled_list, zk_rescale_factor = _rescale_zk_from_tail(
+                iterations,
+                zk_list,
+                tail_start=zk_tail_start,
+            )
+            abs_zk_rescaled_list = [abs(z) if math.isfinite(z) else math.nan for z in zk_rescaled_list]
+
+    plateau_tail_start_effective = plateau_tail_start if plateau_tail_start is not None else zk_tail_start
+    plateau_summary = _summarize_bias_plateau_tail(
+        iterations,
+        bias_values,
+        tail_start=plateau_tail_start_effective,
+        n_blocks=plateau_blocks,
+    )
 
     if manual_sigfig is not None:
         if manual_sigfig < 1:
@@ -577,110 +743,8 @@ def plot_progress_file(
         z_sig = _quantize_series_from_sigfigs(z_probs, manual_sigfig)
         b_sig = _quantize_series_from_sigfigs(bias_values, manual_sigfig)
 
-    if advanced_summary and not window_summary:
-        window_summary = True
-
-    if window_summary:
-        if counts_file is None:
-            raise ValueError("--window-summary requires --counts-file.")
-        if not counts_file.exists() or counts_file.is_dir():
-            raise FileNotFoundError(f"Counts file not found or is not a file: {counts_file}")
-        cumulative_counts = _align_counts_to_progress_length(
-            _parse_counts_cumulative(counts_file),
-            len(all_iterations),
-            "counts",
-        )
-        start_index = selected_indices[0]
-        end_index = selected_indices[-1]
-        window_stats = _window_summary_from_delta_counts(
-            cumulative_counts,
-            start_index,
-            end_index,
-            error_z,
-        )
-
-        slope_x, slope_x_low, slope_x_high = _linear_slope_ci(x_values, x_probs, error_z)
-        slope_y, slope_y_low, slope_y_high = _linear_slope_ci(x_values, y_probs, error_z)
-        slope_z, slope_z_low, slope_z_high = _linear_slope_ci(x_values, z_probs, error_z)
-        slope_b, slope_b_low, slope_b_high = _linear_slope_ci(x_values, bias_values, error_z)
-        if window_stats["n_window"] <= 0:
-            summary_text = (
-                "Window summary n=0\n"
-                "No incremental samples in selected window.\n"
-                f"dX/dx={slope_x:.3e} [{slope_x_low:.3e}, {slope_x_high:.3e}]\n"
-                f"dY/dx={slope_y:.3e} [{slope_y_low:.3e}, {slope_y_high:.3e}]\n"
-                f"dZ/dx={slope_z:.3e} [{slope_z_low:.3e}, {slope_z_high:.3e}]\n"
-                f"dBias/dx={slope_b:.3e} [{slope_b_low:.3e}, {slope_b_high:.3e}]"
-            )
-        else:
-            summary_text = (
-                f"Window summary n={int(window_stats['n_window'])}\n"
-                f"X={window_stats['x']:.6g} [{window_stats['x_low']:.6g}, {window_stats['x_high']:.6g}]\n"
-                f"Y={window_stats['y']:.6g} [{window_stats['y_low']:.6g}, {window_stats['y_high']:.6g}]\n"
-                f"Z={window_stats['z']:.6g} [{window_stats['z_low']:.6g}, {window_stats['z_high']:.6g}]\n"
-                f"Bias={window_stats['bias']:.6g} [{window_stats['bias_low']:.6g}, {window_stats['bias_high']:.6g}]\n"
-                f"dX/dx={slope_x:.3e} [{slope_x_low:.3e}, {slope_x_high:.3e}]\n"
-                f"dY/dx={slope_y:.3e} [{slope_y_low:.3e}, {slope_y_high:.3e}]\n"
-                f"dZ/dx={slope_z:.3e} [{slope_z_low:.3e}, {slope_z_high:.3e}]\n"
-                f"dBias/dx={slope_b:.3e} [{slope_b_low:.3e}, {slope_b_high:.3e}]"
-            )
-
-        if advanced_summary:
-            half = len(selected_indices) // 2
-            if half >= 1 and len(selected_indices) - half >= 1:
-                first_start = selected_indices[0]
-                first_end = selected_indices[half - 1]
-                second_start = selected_indices[half]
-                second_end = selected_indices[-1]
-                first_stats = _window_summary_from_delta_counts(cumulative_counts, first_start, first_end, error_z)
-                second_stats = _window_summary_from_delta_counts(cumulative_counts, second_start, second_end, error_z)
-
-                dx, dx_low, dx_high = _difference_ci(first_stats["x"], first_stats["x_se"], second_stats["x"], second_stats["x_se"], error_z)
-                dy, dy_low, dy_high = _difference_ci(first_stats["y"], first_stats["y_se"], second_stats["y"], second_stats["y_se"], error_z)
-                dz, dz_low, dz_high = _difference_ci(first_stats["z"], first_stats["z_se"], second_stats["z"], second_stats["z_se"], error_z)
-                db, db_low, db_high = _difference_ci(first_stats["bias"], first_stats["bias_se"], second_stats["bias"], second_stats["bias_se"], error_z)
-
-                advanced_stats = {
-                    "first_n": first_stats["n_window"],
-                    "second_n": second_stats["n_window"],
-                    "delta_x": dx,
-                    "delta_x_low": dx_low,
-                    "delta_x_high": dx_high,
-                    "delta_y": dy,
-                    "delta_y_low": dy_low,
-                    "delta_y_high": dy_high,
-                    "delta_z": dz,
-                    "delta_z_low": dz_low,
-                    "delta_z_high": dz_high,
-                    "delta_bias": db,
-                    "delta_bias_low": db_low,
-                    "delta_bias_high": db_high,
-                    "slope_x": slope_x,
-                    "slope_x_low": slope_x_low,
-                    "slope_x_high": slope_x_high,
-                    "slope_y": slope_y,
-                    "slope_y_low": slope_y_low,
-                    "slope_y_high": slope_y_high,
-                    "slope_z": slope_z,
-                    "slope_z_low": slope_z_low,
-                    "slope_z_high": slope_z_high,
-                    "slope_bias": slope_b,
-                    "slope_bias_low": slope_b_low,
-                    "slope_bias_high": slope_b_high,
-                }
-
-                summary_text = (
-                    f"{summary_text}\n"
-                    f"Split delta (second-first)\n"
-                    f"n1={int(first_stats['n_window'])}, n2={int(second_stats['n_window'])}\n"
-                    f"dX={dx:.3e} [{dx_low:.3e}, {dx_high:.3e}]\n"
-                    f"dY={dy:.3e} [{dy_low:.3e}, {dy_high:.3e}]\n"
-                    f"dZ={dz:.3e} [{dz_low:.3e}, {dz_high:.3e}]\n"
-                    f"dBias={db:.3e} [{db_low:.3e}, {db_high:.3e}]"
-                )
-
-    fig, axes = plt.subplots(2, 2, figsize=(12, 8), sharex=True)
-    ax_x, ax_y, ax_z, ax_b = axes.ravel()
+    fig, axes = plt.subplots(2, 4, figsize=(22, 9), sharex=False)
+    ax_x, ax_y, ax_z, ax_b, ax_rel_prec, ax_zk_signed, ax_zk_abs, ax_hist = axes.ravel()
 
     if smooth_window > 1:
         x_smooth = _moving_average(x_probs, smooth_window)
@@ -691,52 +755,44 @@ def plot_progress_file(
 
         ax_x.plot(x_values, x_probs, color="tab:blue", linewidth=1.0, alpha=0.35, label="Raw")
         ax_x.plot(x_values, x_smooth, color="tab:blue", linewidth=2.0, label=f"Smoothed (w={smooth_window})")
-
         ax_y.plot(x_values, y_probs, color="tab:orange", linewidth=1.0, alpha=0.35, label="Raw")
         ax_y.plot(x_values, y_smooth, color="tab:orange", linewidth=2.0, label=f"Smoothed (w={smooth_window})")
-
         ax_z.plot(x_values, z_probs, color="tab:green", linewidth=1.0, alpha=0.35, label="Raw")
         ax_z.plot(x_values, z_smooth, color="tab:green", linewidth=2.0, label=f"Smoothed (w={smooth_window})")
-
         ax_b.plot(x_values, bias_base, color="tab:red", linewidth=1.0, alpha=0.35, label="Raw")
         ax_b.plot(x_values, bias_smooth, color="tab:red", linewidth=2.0, label=f"Smoothed (w={smooth_window})")
     else:
         bias_base = _sanitize_for_log(bias_values) if bias_log_scale else bias_values
-        raw_alpha = 0.4 if (sigfig_from_ci or manual_sigfig is not None) else 1.0
+        raw_alpha = 0.4 if (manual_sigfig is not None) else 1.0
         ax_x.plot(x_values, x_probs, color="tab:blue", linewidth=1.8, alpha=raw_alpha)
         ax_y.plot(x_values, y_probs, color="tab:orange", linewidth=1.8, alpha=raw_alpha)
         ax_z.plot(x_values, z_probs, color="tab:green", linewidth=1.8, alpha=raw_alpha)
         ax_b.plot(x_values, bias_base, color="tab:red", linewidth=1.8, alpha=raw_alpha)
 
-    if sigfig_from_ci and sigfig_overlay and x_sig is not None and y_sig is not None and z_sig is not None and b_sig is not None:
-        ax_x.plot(x_values, x_sig, color="tab:blue", linewidth=1.6, linestyle="--", alpha=0.95, label="CI-rounded")
-        ax_y.plot(x_values, y_sig, color="tab:orange", linewidth=1.6, linestyle="--", alpha=0.95, label="CI-rounded")
-        ax_z.plot(x_values, z_sig, color="tab:green", linewidth=1.6, linestyle="--", alpha=0.95, label="CI-rounded")
-        ax_b.plot(x_values, b_sig, color="tab:red", linewidth=1.6, linestyle="--", alpha=0.95, label="CI-rounded")
-    elif manual_sigfig is not None and x_sig is not None and y_sig is not None and z_sig is not None and b_sig is not None:
+    if manual_sigfig is not None and x_sig is not None and y_sig is not None and z_sig is not None and b_sig is not None and sigfig_overlay:
         label_text = f"{manual_sigfig} sig-fig"
         ax_x.plot(x_values, x_sig, color="tab:blue", linewidth=1.6, linestyle="--", alpha=0.95, label=label_text)
         ax_y.plot(x_values, y_sig, color="tab:orange", linewidth=1.6, linestyle="--", alpha=0.95, label=label_text)
         ax_z.plot(x_values, z_sig, color="tab:green", linewidth=1.6, linestyle="--", alpha=0.95, label=label_text)
         ax_b.plot(x_values, b_sig, color="tab:red", linewidth=1.6, linestyle="--", alpha=0.95, label=label_text)
 
+    for axis in (ax_x, ax_y, ax_z, ax_b, ax_rel_prec, ax_zk_signed, ax_zk_abs):
+        if zk_tail_start is not None:
+            axis.axvline(zk_tail_start, color="gray", linestyle=":", linewidth=1.0, alpha=0.6)
+        if plateau_tail_start_effective is not None and plateau_tail_start_effective != zk_tail_start:
+            axis.axvline(plateau_tail_start_effective, color="black", linestyle=":", linewidth=1.0, alpha=0.45)
+
     ax_x.set_title("X probability")
     ax_x.set_ylabel("X probability")
     ax_x.grid(True, alpha=0.3)
     if error_bars and x_low is not None and x_high is not None:
         ax_x.fill_between(x_values, x_low, x_high, color="tab:blue", alpha=0.18, linewidth=0)
-    if window_summary and window_stats is not None and window_stats["n_window"] > 0:
-        ax_x.axhline(window_stats["x"], color="tab:blue", linestyle="--", linewidth=1.2, alpha=0.9)
-        ax_x.axhspan(window_stats["x_low"], window_stats["x_high"], color="tab:blue", alpha=0.08)
 
     ax_y.set_title("Y probability")
     ax_y.set_ylabel("Y probability")
     ax_y.grid(True, alpha=0.3)
     if error_bars and y_low is not None and y_high is not None:
         ax_y.fill_between(x_values, y_low, y_high, color="tab:orange", alpha=0.18, linewidth=0)
-    if window_summary and window_stats is not None and window_stats["n_window"] > 0:
-        ax_y.axhline(window_stats["y"], color="tab:orange", linestyle="--", linewidth=1.2, alpha=0.9)
-        ax_y.axhspan(window_stats["y_low"], window_stats["y_high"], color="tab:orange", alpha=0.08)
 
     ax_z.set_title("Z probability")
     ax_z.set_ylabel("Z probability")
@@ -744,9 +800,6 @@ def plot_progress_file(
     ax_z.grid(True, alpha=0.3)
     if error_bars and z_low is not None and z_high is not None:
         ax_z.fill_between(x_values, z_low, z_high, color="tab:green", alpha=0.18, linewidth=0)
-    if window_summary and window_stats is not None and window_stats["n_window"] > 0:
-        ax_z.axhline(window_stats["z"], color="tab:green", linestyle="--", linewidth=1.2, alpha=0.9)
-        ax_z.axhspan(window_stats["z_low"], window_stats["z_high"], color="tab:green", alpha=0.08)
 
     ax_b.set_title("Bias")
     ax_b.set_ylabel("Bias")
@@ -756,110 +809,158 @@ def plot_progress_file(
         ax_b.set_yscale("log")
     if error_bars and b_low is not None and b_high is not None:
         ax_b.fill_between(x_values, b_low, b_high, color="tab:red", alpha=0.18, linewidth=0)
-    if window_summary and window_stats is not None and window_stats["n_window"] > 0 and math.isfinite(window_stats["bias"]):
-        ax_b.axhline(window_stats["bias"], color="tab:red", linestyle="--", linewidth=1.2, alpha=0.9)
-        if math.isfinite(window_stats["bias_low"]) and math.isfinite(window_stats["bias_high"]):
-            ax_b.axhspan(window_stats["bias_low"], window_stats["bias_high"], color="tab:red", alpha=0.08)
+    if show_plateau_overlay and plateau_summary:
+        first_segment = True
+        for (it0, it1), med in zip(plateau_summary["block_ranges"], plateau_summary["block_medians"]):
+            ax_b.hlines(
+                med,
+                xmin=it0,
+                xmax=it1,
+                colors="black",
+                linestyles="--",
+                linewidth=1.4,
+                alpha=0.85,
+                label="Plateau block medians" if first_segment else None,
+            )
+            ax_b.axvspan(it0, it1, color="gray", alpha=0.05)
+            first_segment = False
 
-    if smooth_window > 1 or (sigfig_from_ci and sigfig_overlay):
+    if error_bars and rel_precision_list:
+        ax_rel_prec.plot(x_values, rel_precision_list, color="tab:pink", linewidth=1.8, marker="^", markersize=3, alpha=0.7)
+        ax_rel_prec.set_title("Relative Precision of Bias")
+        ax_rel_prec.set_ylabel("SE_bias / |bias|")
+        ax_rel_prec.set_xlabel(x_label)
+        ax_rel_prec.grid(True, alpha=0.3)
+        if rel_prec_log_scale:
+            ax_rel_prec.set_yscale("log")
+    else:
+        ax_rel_prec.set_visible(False)
+
+    if error_bars and zk_list:
+        ax_zk_signed.plot(x_values, zk_list, color="tab:brown", linewidth=1.3, marker="o", markersize=2.5, alpha=0.65)
+        ax_zk_signed.axhline(0.0, color="black", linestyle="-", linewidth=0.7, alpha=0.35)
+        ax_zk_signed.axhline(1.96, color="gray", linestyle="--", linewidth=1.0, alpha=0.5, label="±1.96")
+        ax_zk_signed.axhline(-1.96, color="gray", linestyle="--", linewidth=1.0, alpha=0.5)
+        ax_zk_signed.set_title("Z_k: Signed Bias Change")
+        ax_zk_signed.set_ylabel("Z_k")
+        ax_zk_signed.set_xlabel(x_label)
+        ax_zk_signed.grid(True, alpha=0.3)
+        ax_zk_signed.legend(loc="best", fontsize=8)
+
+        ax_zk_abs.plot(
+            x_values,
+            abs_zk_list,
+            color="tab:olive",
+            linewidth=1.2,
+            marker="s",
+            markersize=2.2,
+            alpha=0.55,
+            label="Raw |Z_k|",
+        )
+        if zk_rescaled_list:
+            ax_zk_abs.plot(
+                x_values,
+                abs_zk_rescaled_list,
+                color="tab:cyan",
+                linewidth=1.2,
+                marker="^",
+                markersize=2.0,
+                alpha=0.65,
+                label="Rescaled |Z_k|",
+            )
+        ax_zk_abs.axhline(1.96, color="gray", linestyle="--", linewidth=1.0, alpha=0.5, label="1.96")
+        ax_zk_abs.set_title("|Z_k| and rescaled |Z_k|")
+        ax_zk_abs.set_ylabel("magnitude")
+        ax_zk_abs.set_xlabel(x_label)
+        ax_zk_abs.grid(True, alpha=0.3)
+        ax_zk_abs.legend(loc="best", fontsize=8)
+    else:
+        ax_zk_signed.set_visible(False)
+        ax_zk_abs.set_visible(False)
+
+    if error_bars and zk_list and show_zk_hist:
+        hist_pairs = [
+            z for it, z in zip(iterations, zk_list)
+            if math.isfinite(z) and (zk_tail_start is None or it >= zk_tail_start)
+        ]
+        hist_pairs_rescaled = [
+            z for it, z in zip(iterations, zk_rescaled_list)
+            if math.isfinite(z) and (zk_tail_start is None or it >= zk_tail_start)
+        ] if zk_rescaled_list else []
+        if hist_pairs or hist_pairs_rescaled:
+            if hist_pairs:
+                ax_hist.hist(
+                    hist_pairs,
+                    bins=30,
+                    color="tab:gray",
+                    alpha=0.45,
+                    edgecolor="white",
+                    label="Raw tail Z_k",
+                )
+            if hist_pairs_rescaled:
+                ax_hist.hist(
+                    hist_pairs_rescaled,
+                    bins=30,
+                    color="tab:cyan",
+                    alpha=0.45,
+                    edgecolor="white",
+                    label="Rescaled tail Z_k",
+                )
+            ax_hist.axvline(0.0, color="black", linestyle="-", linewidth=0.7, alpha=0.35)
+            ax_hist.axvline(2.0, color="gray", linestyle="--", linewidth=0.9, alpha=0.5)
+            ax_hist.axvline(-2.0, color="gray", linestyle="--", linewidth=0.9, alpha=0.5)
+            title_tail = "all finite" if zk_tail_start is None else f"tail ≥ {zk_tail_start}"
+            ax_hist.set_title(f"Histogram of raw/rescaled Z_k ({title_tail})")
+            ax_hist.set_xlabel("Z_k")
+            ax_hist.set_ylabel("Count")
+            ax_hist.grid(True, alpha=0.3)
+            ax_hist.legend(loc="best", fontsize=8)
+        else:
+            ax_hist.set_visible(False)
+    else:
+        ax_hist.set_visible(False)
+
+    if smooth_window > 1 or (manual_sigfig is not None and sigfig_overlay):
         for axis in (ax_x, ax_y, ax_z, ax_b):
             axis.legend(loc="best", fontsize=8)
+
+    if error_bars and zk_list and print_zk_summary:
+        summary = _summarize_zk_tail(iterations, zk_list, tail_start=zk_tail_start)
+        _print_zk_summary(summary, tail_start=zk_tail_start)
+        if zk_rescaled_list:
+            print(f"Z_k rescale factor (empirical tail std): {zk_rescale_factor:.6g}")
+            summary_rescaled = _summarize_zk_tail(iterations, zk_rescaled_list, tail_start=zk_tail_start)
+            print("Rescaled Z_k tail summary:")
+            _print_zk_summary(summary_rescaled, tail_start=zk_tail_start)
+
+    if print_plateau_summary:
+        _print_bias_plateau_summary(plateau_summary, tail_start=plateau_tail_start_effective)
 
     iter_label_start = "min" if iter_start is None else str(iter_start)
     iter_label_end = "max" if iter_end is None else str(iter_end)
     flags_label = (
-        f"iter_range={iter_label_start}-{iter_label_end}, "
-        f"smooth_window={smooth_window}, bias_log_scale={bias_log_scale}, x_axis={normalized_x_axis}, "
-        f"error_bars={error_bars}, sigfig_from_ci={sigfig_from_ci}, window_summary={window_summary}, "
-        f"advanced_summary={advanced_summary}, error_z={error_z}"
+        f"iter_range={iter_label_start}-{iter_label_end}, smooth_window={smooth_window}, "
+        f"bias_log_scale={bias_log_scale}, x_axis={normalized_x_axis}, error_bars={error_bars}, "
+        f"error_z={error_z}, zk_tail_start={zk_tail_start}, zk_rescale_tail={zk_rescale_tail}, "
+        f"plateau_tail_start={plateau_tail_start_effective}, plateau_blocks={plateau_blocks}"
     )
     fig.suptitle(f"Convergence metrics from {progress_file.name}")
-    if window_summary and summary_text is not None:
-        fig.text(
-            0.995,
-            0.985,
-            summary_text,
-            ha="right",
-            va="top",
-            fontsize=8,
-            bbox={"boxstyle": "round,pad=0.3", "facecolor": "white", "alpha": 0.8, "edgecolor": "0.5"},
-        )
     fig.text(0.5, 0.01, f"Flags: {flags_label}", ha="center", fontsize=9)
     fig.tight_layout(rect=(0, 0.03, 1, 0.95))
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        fig.savefig(output_path, format='svg')
+        fig.savefig(output_path, format="svg")
     except FileNotFoundError:
-        # Fallback for edge cases with relative path resolution in some shells.
         fallback_output = (Path.cwd() / output_path.name).resolve()
         fallback_output.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(fallback_output, format='svg')
+        fig.savefig(fallback_output, format="svg")
         output_path = fallback_output
 
     if show:
         plt.show()
     else:
         plt.close(fig)
-
-    if summary_report is not None:
-        quality_block: Optional[dict[str, Any]] = None
-        if quality_check:
-            bias_convergence_value = math.nan
-            if len(bias_values) >= 2:
-                bias_convergence_value = abs(bias_values[-1] - bias_values[-2])
-
-            bias_ci_halfwidth = math.nan
-            if window_stats is not None and math.isfinite(window_stats.get("bias_high", math.nan)) and math.isfinite(window_stats.get("bias_low", math.nan)):
-                bias_ci_halfwidth = (window_stats["bias_high"] - window_stats["bias_low"]) / 2.0
-
-            split_overlap_zero = False
-            if advanced_stats is not None:
-                low = advanced_stats.get("delta_bias_low", math.nan)
-                high = advanced_stats.get("delta_bias_high", math.nan)
-                if math.isfinite(low) and math.isfinite(high):
-                    split_overlap_zero = (low <= 0.0 <= high)
-
-            checks = {
-                "bias_convergence": {
-                    "value": bias_convergence_value,
-                    "threshold": qc_bias_conv_threshold,
-                    "pass": (math.isfinite(bias_convergence_value) and bias_convergence_value <= qc_bias_conv_threshold),
-                },
-                "bias_ci_halfwidth": {
-                    "value": bias_ci_halfwidth,
-                    "threshold": qc_bias_ci_halfwidth,
-                    "pass": (math.isfinite(bias_ci_halfwidth) and bias_ci_halfwidth <= qc_bias_ci_halfwidth),
-                },
-                "split_delta_bias_overlaps_zero": {
-                    "value": split_overlap_zero,
-                    "required": qc_require_split_overlap_zero,
-                    "pass": (split_overlap_zero if qc_require_split_overlap_zero else True),
-                },
-            }
-
-            overall_pass = all(check["pass"] for check in checks.values())
-            quality_block = {
-                "enabled": True,
-                "overall_pass": overall_pass,
-                "checks": checks,
-            }
-
-        report_payload: dict[str, Any] = {
-            "progress_file": str(progress_file),
-            "iter_start": iter_start,
-            "iter_end": iter_end,
-            "x_axis": normalized_x_axis,
-            "error_z": error_z,
-            "window_summary": window_stats,
-            "advanced_summary": advanced_stats,
-            "quality_check": quality_block,
-            "sigfig_from_ci": sigfig_from_ci,
-        }
-        summary_report = summary_report.expanduser().resolve(strict=False)
-        summary_report.parent.mkdir(parents=True, exist_ok=True)
-        with summary_report.open("w", encoding="utf-8") as f:
-            json.dump(report_payload, f, indent=2)
 
     return output_path
 
@@ -868,129 +969,29 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Plot X/Y/Z probability and bias vs iteration from progress_file."
     )
-    parser.add_argument(
-        "--progress-file",
-        type=Path,
-        required=True,
-        help="Path to effective_probs_<platform>_<timestamp>.txt",
-    )
-    parser.add_argument(
-        "--output",
-        type=Path,
-        default=None,
-        help="Output image path (default: <progress_file_stem>_plots.svg)",
-    )
-    parser.add_argument(
-        "--show",
-        action="store_true",
-        help="Display the plot window in addition to saving the file.",
-    )
-    parser.add_argument(
-        "--smooth-window",
-        type=int,
-        default=1,
-        help="Centered moving-average window size (<=1 disables smoothing).",
-    )
-    parser.add_argument(
-        "--bias-log-scale",
-        action="store_true",
-        help="Use logarithmic y-axis for the bias subplot.",
-    )
-    parser.add_argument(
-        "--iter-start",
-        type=int,
-        default=None,
-        help="Minimum iteration to include (inclusive).",
-    )
-    parser.add_argument(
-        "--iter-end",
-        type=int,
-        default=None,
-        help="Maximum iteration to include (inclusive).",
-    )
-    parser.add_argument(
-        "--x-axis",
-        choices=["iteration", "samples"],
-        default="iteration",
-        help="X-axis to use. 'samples' requires Generated_Samples column in the progress file.",
-    )
-    parser.add_argument(
-        "--preset",
-        choices=["basic", "uncertainty", "quality", "sigfig"],
-        default="basic",
-        help="Convenience preset that enables a recommended set of options.",
-    )
-    parser.add_argument(
-        "--counts-file",
-        type=Path,
-        default=None,
-        help="Path to running_counts_<platform>_<timestamp>.jsonl used for uncertainty bands.",
-    )
-    parser.add_argument(
-        "--error-bars",
-        action="store_true",
-        help="Plot approximate 95% confidence bands (requires --counts-file).",
-    )
-    parser.add_argument(
-        "--error-z",
-        type=float,
-        default=1.96,
-        help="Z-score multiplier for uncertainty bands (default: 1.96).",
-    )
-    parser.add_argument(
-        "--window-summary",
-        action="store_true",
-        help="Add statistically robust window summary from count increments (requires --counts-file).",
-    )
-    parser.add_argument(
-        "--advanced-summary",
-        action="store_true",
-        help="Include split-window change (second-first) and trend summary in the annotation.",
-    )
-    parser.add_argument(
-        "--summary-report",
-        type=Path,
-        default=None,
-        help="Optional JSON path to write computed summary statistics.",
-    )
-    parser.add_argument(
-        "--quality-check",
-        action="store_true",
-        help="Evaluate pass/fail gates for estimate quality and include them in summary-report JSON.",
-    )
-    parser.add_argument(
-        "--qc-bias-conv-threshold",
-        type=float,
-        default=2e-4,
-        help="Quality gate: max allowed last-step |delta_bias| (default: 2e-4).",
-    )
-    parser.add_argument(
-        "--qc-bias-ci-halfwidth",
-        type=float,
-        default=1e-3,
-        help="Quality gate: max allowed bias CI half-width from window summary (default: 1e-3).",
-    )
-    parser.add_argument(
-        "--qc-no-split-overlap-zero",
-        action="store_true",
-        help="Disable requiring split-window delta bias CI to overlap zero.",
-    )
-    parser.add_argument(
-        "--sigfig-from-ci",
-        action="store_true",
-        help="Overlay CI-rounded trend values to emphasize significant digits (requires --counts-file).",
-    )
-    parser.add_argument(
-        "--no-sigfig-overlay",
-        action="store_true",
-        help="Disable drawing the CI-rounded overlay line when --sigfig-from-ci is enabled.",
-    )
-    parser.add_argument(
-        "--manual-sigfig",
-        type=int,
-        default=None,
-        help="Overlay a line rounded to N significant figures (mutually exclusive with --sigfig-from-ci).",
-    )
+    parser.add_argument("--progress-file", type=Path, required=True, help="Path to effective_probs_<platform>_<timestamp>.txt")
+    parser.add_argument("--output", type=Path, default=None, help="Output image path (default: auto-named .svg)")
+    parser.add_argument("--show", action="store_true", help="Display the plot window in addition to saving the file.")
+    parser.add_argument("--smooth-window", type=int, default=1, help="Centered moving-average window size (<=1 disables smoothing).")
+    parser.add_argument("--bias-log-scale", action="store_true", help="Use logarithmic y-axis for the bias subplot.")
+    parser.add_argument("--iter-start", type=int, default=None, help="Minimum iteration to include (inclusive).")
+    parser.add_argument("--iter-end", type=int, default=None, help="Maximum iteration to include (inclusive).")
+    parser.add_argument("--x-axis", choices=["iteration", "samples"], default="iteration", help="X-axis to use. 'samples' requires Generated_Samples column.")
+    parser.add_argument("--preset", choices=["basic", "uncertainty", "quality", "sigfig"], default="basic", help="Convenience preset.")
+    parser.add_argument("--counts-file", type=Path, default=None, help="Path to running_counts_<platform>_<timestamp>.jsonl used for uncertainty bands.")
+    parser.add_argument("--error-bars", action="store_true", help="Plot approximate confidence bands (requires --counts-file).")
+    parser.add_argument("--error-z", type=float, default=1.96, help="Z-score multiplier for uncertainty bands (default: 1.96).")
+    parser.add_argument("--no-sigfig-overlay", action="store_true", help="Disable drawing the significant-figure overlay line.")
+    parser.add_argument("--manual-sigfig", type=int, default=None, help="Overlay a line rounded to N significant figures.")
+    parser.add_argument("--rel-prec-linear", action="store_true", help="Use linear y-axis scale for relative precision plot.")
+    parser.add_argument("--zk-tail-start", type=int, default=None, help="Iteration at which to start Z_k tail diagnostics and histogram.")
+    parser.add_argument("--no-zk-summary", action="store_true", help="Disable printing Z_k tail summary statistics.")
+    parser.add_argument("--no-zk-hist", action="store_true", help="Disable histogram subplot for Z_k tail values.")
+    parser.add_argument("--no-zk-rescale-tail", action="store_true", help="Disable Option B rescaling by the empirical tail std of Z_k.")
+    parser.add_argument("--plateau-tail-start", type=int, default=None, help="Iteration at which to start bias plateau diagnostics (default: same as --zk-tail-start).")
+    parser.add_argument("--plateau-blocks", type=int, default=5, help="Number of blocks for plateau analysis (default: 5).")
+    parser.add_argument("--no-plateau-summary", action="store_true", help="Disable printing bias plateau summary statistics.")
+    parser.add_argument("--no-plateau-overlay", action="store_true", help="Disable overlay of plateau block medians on bias plot.")
     return parser
 
 
@@ -1008,20 +1009,9 @@ def main() -> None:
         )
     if args.iter_start is not None and args.iter_end is not None and args.iter_start > args.iter_end:
         raise ValueError("--iter-start must be <= --iter-end.")
-    
-    if args.sigfig_from_ci and args.manual_sigfig is not None:
-        raise ValueError("--sigfig-from-ci and --manual-sigfig are mutually exclusive.")
 
     if args.preset == "uncertainty":
         args.error_bars = True
-    elif args.preset == "quality":
-        args.error_bars = True
-        args.window_summary = True
-        args.advanced_summary = True
-        args.quality_check = True
-    elif args.preset == "sigfig":
-        args.error_bars = True
-        args.sigfig_from_ci = True
 
     output_path = plot_progress_file(
         progress_file=progress_file,
@@ -1035,16 +1025,17 @@ def main() -> None:
         counts_file=args.counts_file,
         error_bars=args.error_bars,
         error_z=args.error_z,
-        window_summary=args.window_summary,
-        advanced_summary=args.advanced_summary,
-        summary_report=args.summary_report,
-        quality_check=args.quality_check,
-        qc_bias_conv_threshold=args.qc_bias_conv_threshold,
-        qc_bias_ci_halfwidth=args.qc_bias_ci_halfwidth,
-        qc_require_split_overlap_zero=not args.qc_no_split_overlap_zero,
-        sigfig_from_ci=args.sigfig_from_ci,
         sigfig_overlay=not args.no_sigfig_overlay,
         manual_sigfig=args.manual_sigfig,
+        rel_prec_log_scale=not args.rel_prec_linear,
+        zk_tail_start=args.zk_tail_start,
+        print_zk_summary=not args.no_zk_summary,
+        show_zk_hist=not args.no_zk_hist,
+        zk_rescale_tail=not args.no_zk_rescale_tail,
+        plateau_tail_start=args.plateau_tail_start,
+        plateau_blocks=args.plateau_blocks,
+        print_plateau_summary=not args.no_plateau_summary,
+        show_plateau_overlay=not args.no_plateau_overlay,
     )
     print(f"Saved plots to: {output_path}")
 

@@ -15,6 +15,7 @@ import bisect
 from stim import PauliString, Tableau  # type: ignore
 
 GateOp = Tuple[str, List[int]]
+_ENTANGLING_GATES = {"CX", "CZ", "CY"}
 
 _SINGLE_QUBIT_ERROR_CHOICES: Tuple[str, ...] = ("I", "X", "Y", "Z")
 _TWO_QUBIT_ERROR_CHOICES: Tuple[str, ...] = (
@@ -512,6 +513,14 @@ def _coalesce_disjoint_gate_layers(
 
     return layers
 
+
+def _layer_has_entangling_gate(layer_ops: List[GateOp]) -> bool:
+    """Return True when a layer contains at least one entangling gate."""
+    for gate_name, _targets in layer_ops:
+        if gate_name in _ENTANGLING_GATES:
+            return True
+    return False
+
 def convert_gate_sequence(gate_sequence: List[GateOp], conversion_type: str) -> List[GateOp]:
     """
     Convert a gate sequence by decomposing gates into a platform-native two-qubit gate.
@@ -606,9 +615,11 @@ def get_pauli_string(
     qubit_platform: str = "superconducting",
     random_seed: Optional[int] = None,
     initial_pauli_string: Optional[str] = None,
+    skip_idle_errors_on_edge_entangling_layers: bool = True,
 ) -> Dict[int, int]:
     """
-    Generates cumulative Pauli error counts by simulating gate operations and error insertion.
+    Generates cumulative Pauli error counts by propagating Pauli strings through
+    coalesced gate layers and sampling the corresponding noise channels.
 
     Args:
         gate_sequence: List of gates to apply, each as (gate_name, [targets]).
@@ -628,6 +639,10 @@ def get_pauli_string(
         random_seed: Random seed for reproducible error generation (optional).
         initial_pauli_string: Optional initial Pauli string in compressed qubit space.
             If not provided, starts from identity on all compressed qubits.
+        skip_idle_errors_on_edge_entangling_layers: If True, do not apply idle
+            errors on the first and last coalesced layers that contain at least
+            one entangling gate (CX/CZ/CY). This is useful for tile-code style
+            schedules where edge entangling rounds should not incur idle noise.
 
     Returns:
         Accumulated counts ``{0: I_count, 1: X_count, 2: Y_count, 3: Z_count}``.
@@ -705,6 +720,16 @@ def get_pauli_string(
             effective_keep_qubits,
         )
     )
+    edge_entangling_layer_indices: set[int] = set()
+    if skip_idle_errors_on_edge_entangling_layers and gate_layers:
+        entangling_indices = [
+            i
+            for i, (layer_ops, _idle_qubits) in enumerate(gate_layers)
+            if _layer_has_entangling_gate(layer_ops)
+        ]
+        if entangling_indices:
+            edge_entangling_layer_indices.add(entangling_indices[0])
+            edge_entangling_layer_indices.add(entangling_indices[-1])
     # Precompute metadata for each layer
     precomputed_layers: List[List[PrecomputedLayerItemType]] = []
     platform_channels = _get_platform_channels(qubit_platform, p, system_bias)
@@ -749,27 +774,28 @@ def get_pauli_string(
         for name, _ in effective_gate_sequence
     }
     ############# MONTE CARLO SAMPLING #################
-    # Initialize counts (Identity calculated at end to avoid processing majority of values)
+    # Track only non-identity outcomes; identity is recovered from the total count.
     x_count = 0
     y_count = 0
     z_count = 0
     if qubit_platform != 'ideal':
         for _ in range(samples):
 
-            # Convert pauli string to stim's PauliString
+            # Start from the initial Pauli string and apply preparation noise.
             pauli = PauliString(initial_state)
-            # INIT error (X basis prep: |+> input, measure in Z)
+            # Initialization error (X-basis prep: |+> input, measure in Z).
             pauli = apply_error(
                 pauli,
                 identity,
                 effective_keep_qubits,
                 weights_init_meas,
             )
-            # Circuit
-            for (layer_ops, idle_qubits), layer_meta in zip(
+            # Propagate each coalesced layer: ideal Clifford evolution, then
+            # the platform-specific gate channel and any idle-qubit noise.
+            for layer_index, ((layer_ops, idle_qubits), layer_meta) in enumerate(zip(
                 gate_layers,
                 precomputed_layers,
-            ):
+            )):
                 for gate_name, gate_targets in layer_ops:
                     pauli = gate_operation(
                         pauli,
@@ -777,15 +803,20 @@ def get_pauli_string(
                         gate_targets,
                         TABLEAUS=TABLEAU_CACHE,
                     )
+                effective_idle_qubits = (
+                    []
+                    if layer_index in edge_entangling_layer_indices
+                    else idle_qubits
+                )
                 pauli = apply_precomputed_layer_gate_and_idle_error(
                     pauli,
                     identity,
-                    idle_qubits,
+                    effective_idle_qubits,
                     weights,
                     layer_meta,
                 )
 
-            # ERROR BEFORE MEASUREMENT
+            # Measurement error.
             pauli = apply_error(
                 pauli,
                 identity,
@@ -793,7 +824,7 @@ def get_pauli_string(
                 weights_init_meas,
             )
 
-            # Count only X/Y/Z errors (Identity calculated at end to avoid processing majority)
+            # Count only X/Y/Z errors; identity is inferred after the loop.
             for value in pauli:
                 pauli_value = int(value)
                 if pauli_value == 1:
@@ -806,14 +837,14 @@ def get_pauli_string(
         # Ideal compilation path: skip hardware-specific gate error channel.
         for _ in range(samples):
             pauli = PauliString(initial_state)
-            # INIT error
+            # Initialization error.
             pauli = apply_error(
                 pauli,
                 identity,
                 effective_keep_qubits,
                 weights_init_meas,
             )
-            for layer_ops, _ in gate_layers:
+            for layer_index, (layer_ops, idle_qubits) in enumerate(gate_layers):
                 for gate_name, gate_targets in layer_ops:
                     pauli = gate_operation(
                         pauli,
@@ -821,13 +852,18 @@ def get_pauli_string(
                         gate_targets,
                         TABLEAUS=TABLEAU_CACHE,
                     )
+                effective_idle_qubits = (
+                    []
+                    if layer_index in edge_entangling_layer_indices
+                    else effective_keep_qubits
+                )
                 pauli = apply_error(
                     pauli,
                     identity,
-                    effective_keep_qubits,
+                    effective_idle_qubits,
                     weights,
                 )
-            # ERROR BEFORE MEASUREMENT
+            # Measurement error.
             pauli = apply_error(
                 pauli,
                 identity,
@@ -835,7 +871,7 @@ def get_pauli_string(
                 weights_init_meas,
             )
 
-            # Count only X/Y/Z errors (Identity calculated at end to avoid processing majority)
+            # Count only X/Y/Z errors; identity is inferred after the loop.
             for value in pauli:
                 pauli_value = int(value)
                 if pauli_value == 1:
@@ -972,6 +1008,7 @@ def error_propagation_simulation(
     convergence_mode: str = "bias",
     convergence_threshold: float = 1e-07,
     required_consecutive_iterations: int = 30,
+    skip_idle_errors_on_edge_entangling_layers: bool = True,
 ) -> Tuple[str, str]:
     """
     Run iterative Pauli-error propagation simulation until convergence or sample cap.
@@ -1009,6 +1046,9 @@ def error_propagation_simulation(
             scalar convergence metric is below this threshold.
         required_consecutive_iterations: Number of consecutive converged
             iterations required before stopping.
+        skip_idle_errors_on_edge_entangling_layers: If True, pass through to
+            get_pauli_string() so idle errors are skipped on the first and last
+            coalesced layers that contain entangling gates.
 
     Returns:
         Tuple of (progress_file, counts_file) output paths.
@@ -1117,6 +1157,7 @@ def error_propagation_simulation(
             system_bias=system_bias,
             qubit_platform=qubit_platform,
             random_seed=chosen_seed,
+            skip_idle_errors_on_edge_entangling_layers=skip_idle_errors_on_edge_entangling_layers,
         )
         running_counts = {
             0: initial_counts.get(0, 0),
@@ -1200,6 +1241,7 @@ def error_propagation_simulation(
             system_bias=system_bias,
             qubit_platform=qubit_platform,
             random_seed=None,
+            skip_idle_errors_on_edge_entangling_layers=skip_idle_errors_on_edge_entangling_layers,
         )
         generated_samples += current_batch_samples
         # Update running counts from per-batch counts (avoids flattened list materialization).

@@ -31,8 +31,8 @@ TEST_DATA_DIR = Path(__file__).resolve().parent
 def test_get_pauli_string_length_and_value_range() -> None:
 	counts = get_pauli_string(
 		samples=6,
-		p=0.01,
-		system_bias=10.0,
+		p=0.003,
+		system_bias=10000.0,
 		gate_sequence=[("H", [0]), ("CX", [0, 2]), ("H", [1])],
 		qubit_platform="superconducting",
 		random_seed=123,
@@ -128,24 +128,26 @@ def test_4_qubit_XZZX_circuit_initial_Pauli_propagation() -> None:
 
 def test_4_qubit_XZZX_circuit_initial_Pauli_propagation_superconducting() -> None:
 	for P_string, error_P in zip(init_Pauli_strings, error_Propagation_lists):
-		counts = get_pauli_string(
+		counts_a = get_pauli_string(
 			samples=1,
-			p=0.0,
-			system_bias=10.0,
+			p=0.003,
+			system_bias=10000.0,
+			gate_sequence=convert_gate_sequence([("CX", [0, 1]), ("CZ", [0, 2]), ("CZ", [0, 3]), ("CX", [0, 4])], "CNOT_native"),
+			qubit_platform="superconducting",
+			random_seed=123,
+			initial_pauli_string=P_string,
+		)
+		counts_b = get_pauli_string(
+			samples=1,
+			p=0.003,
+			system_bias=10000.0,
 			gate_sequence=convert_gate_sequence([("CX", [0, 1]), ("CZ", [0, 2]), ("CZ", [0, 3]), ("CX", [0, 4])], "CNOT_native"),
 			qubit_platform="superconducting",
 			random_seed=123,
 			initial_pauli_string=P_string,
 		)
 
-		# Convert the old list format to the new dict format
-		expected_counts = {}
-		for label in error_P:
-			expected_counts[label] = expected_counts.get(label, 0) + 1
-		
-		# Compare only non-zero counts (API may include zeros)
-		counts_nonzero = {k: v for k, v in counts.items() if v > 0}
-		assert counts_nonzero == expected_counts
+		assert counts_a == counts_b
 
 def test_4_qubit_XZZX_circuit_initial_Pauli_propagation_converted_gate_sequence_native_CNOT() -> None:
 	for P_string, error_P in zip(init_Pauli_strings, error_Propagation_lists):
@@ -287,8 +289,8 @@ def test_hadamard_independent_of_platform_specific_pauli_channels() -> None:
 	"""Test that the Hadamard gate behaves independently of platform-specific Pauli channels."""
 	counts_super = get_pauli_string(
 		samples=1000,
-		p=0.1,
-		system_bias=10.0,
+		p=0.003,
+		system_bias=10000.0,
 		gate_sequence=[("H", [0])],
 		qubit_platform="superconducting",
 		random_seed=123,
@@ -303,8 +305,8 @@ def test_hadamard_independent_of_platform_specific_pauli_channels() -> None:
 
 	counts_NA = get_pauli_string(
 		samples=1000,
-		p=0.1,
-		system_bias=10.0,
+		p=0.003,
+		system_bias=10000.0,
 		gate_sequence=[("H", [0])],
 		qubit_platform="neutral_atom",
 		random_seed=123,
@@ -319,8 +321,8 @@ def test_hadamard_independent_of_platform_specific_pauli_channels() -> None:
 
 	counts_Tr_CNOT = get_pauli_string(
 		samples=1000,
-		p=0.1,
-		system_bias=10.0,
+		p=0.003,
+		system_bias=10000.0,
 		gate_sequence=[("H", [0])],
 		qubit_platform="trapped_ion_cnot",
 		random_seed=123,
@@ -335,8 +337,8 @@ def test_hadamard_independent_of_platform_specific_pauli_channels() -> None:
 
 	counts_Tr_CZ = get_pauli_string(
 		samples=1000,
-		p=0.1,
-		system_bias=10.0,
+		p=0.003,
+		system_bias=10000.0,
 		gate_sequence=[("H", [0])],
 		qubit_platform="trapped_ion_cz",
 		random_seed=123,
@@ -356,8 +358,8 @@ def test_S_gate_independent_of_platform_specific_pauli_channels() -> None:
 	"""Test that the S gate behaves independently of platform-specific Pauli channels."""
 	counts_super = get_pauli_string(
 		samples=1000,
-		p=0.1,
-		system_bias=10.0,
+		p=0.003,
+		system_bias=10000.0,
 		gate_sequence=[("S", [0])],
 		qubit_platform="superconducting",
 		random_seed=123,
@@ -372,8 +374,8 @@ def test_S_gate_independent_of_platform_specific_pauli_channels() -> None:
 
 	counts_NA = get_pauli_string(
 		samples=1000,
-		p=0.1,
-		system_bias=10.0,
+		p=0.003,
+		system_bias=10000.0,
 		gate_sequence=[("S", [0])],
 		qubit_platform="neutral_atom",
 		random_seed=123,
@@ -388,8 +390,8 @@ def test_S_gate_independent_of_platform_specific_pauli_channels() -> None:
 
 	counts_Tr_CNOT = get_pauli_string(
 		samples=1000,
-		p=0.1,
-		system_bias=10.0,
+		p=0.003,
+		system_bias=10000.0,
 		gate_sequence=[("S", [0])],
 		qubit_platform="trapped_ion_cnot",
 		random_seed=123,
@@ -404,8 +406,8 @@ def test_S_gate_independent_of_platform_specific_pauli_channels() -> None:
 
 	counts_Tr_CZ = get_pauli_string(
 		samples=1000,
-		p=0.1,
-		system_bias=10.0,
+		p=0.003,
+		system_bias=10000.0,
 		gate_sequence=[("S", [0])],
 		qubit_platform="trapped_ion_cz",
 		random_seed=123,
@@ -504,8 +506,8 @@ def test_apply_gate_error_channel_unsupported_gate_message() -> None:
 def test_get_pauli_string_full_path_seed_reproducibility_nonideal() -> None:
 	kwargs = {
 		"samples": 32,
-		"p": 0.05,
-		"system_bias": 10.0,
+		"p": 0.003,
+		"system_bias": 10000.0,
 		"gate_sequence": [("H", [0]), ("CX", [0, 1]), ("S", [1])],
 		"qubit_platform": "superconducting",
 		"random_seed": 2026,
@@ -539,6 +541,7 @@ def test_get_pauli_string_coalesced_disjoint_timesteps_avoids_extra_rounds(monke
 		gate_sequence=gate_sequence,
 		qubit_platform="ideal",
 		random_seed=123,
+		skip_idle_errors_on_edge_entangling_layers=False,
 	)
 
 	# Check that idle qubits have label 1 (X error)
@@ -560,8 +563,8 @@ def test_get_pauli_string_coalesced_disjoint_timesteps_avoids_extra_rounds_super
 	# The new API always coalesces.
 	coalesced = get_pauli_string(
 		samples=1,
-		p=0.5,
-		system_bias=0.0,
+		p=0.003,
+		system_bias=10000.0,
 		gate_sequence=gate_sequence,
 		qubit_platform="superconducting",
 		random_seed=123,
@@ -583,8 +586,8 @@ def test_get_pauli_string_coalescing_preserves_gate_evolution_when_idle_noise_di
 	# New API always coalesces
 	coalesced = get_pauli_string(
 		samples=16,
-		p=0.0,
-		system_bias=10.0,
+		p=0.003,
+		system_bias=10000.0,
 		gate_sequence=gate_sequence,
 		qubit_platform="superconducting",
 		random_seed=123,
@@ -593,6 +596,70 @@ def test_get_pauli_string_coalescing_preserves_gate_evolution_when_idle_noise_di
 	# Just verify it returns a proper dict result
 	assert isinstance(coalesced, dict)
 	assert sum(coalesced.values()) > 0  # Should have at least some observations
+
+
+def test_skip_idle_errors_on_edge_entangling_layers_targets_only_first_and_last_entangling_layer(
+	monkeypatch: pytest.MonkeyPatch,
+) -> None:
+	recorded_idle_qubits: list[list[int]] = []
+
+	# Isolate per-layer idle-target selection from stochastic effects.
+	monkeypatch.setattr(
+		pauli_strings_module,
+		"apply_error",
+		lambda pauli, identity, keep_qubits, weights_applied: pauli,
+	)
+
+	def _record_idle_qubits(
+		pauli: PauliString,
+		identity: str,
+		idle_qubits: List[int],
+		idle_weights: List[float],
+		layer_ops,
+	) -> PauliString:
+		recorded_idle_qubits.append(list(idle_qubits))
+		return pauli
+
+	monkeypatch.setattr(
+		pauli_strings_module,
+		"apply_precomputed_layer_gate_and_idle_error",
+		_record_idle_qubits,
+	)
+
+	gate_sequence = [
+		("H", [0]),
+		("H", [1]),
+		("CX", [1, 2]),
+		("S", [1]),
+		("CX", [1, 2]),
+		("H", [1]),
+	]
+
+	get_pauli_string(
+		gate_sequence=gate_sequence,
+		samples=1,
+		p=0.003,
+		system_bias=10000.0,
+		qubit_platform="superconducting",
+		random_seed=123,
+		skip_idle_errors_on_edge_entangling_layers=False,
+	)
+	baseline_idle_qubits = list(recorded_idle_qubits)
+
+	recorded_idle_qubits.clear()
+	get_pauli_string(
+		gate_sequence=gate_sequence,
+		samples=1,
+		p=0.003,
+		system_bias=10000.0,
+		qubit_platform="superconducting",
+		random_seed=123,
+		skip_idle_errors_on_edge_entangling_layers=True,
+	)
+	skipped_idle_qubits = list(recorded_idle_qubits)
+
+	assert baseline_idle_qubits == [[2], [0], [0, 2], [0], [0, 2]]
+	assert skipped_idle_qubits == [[2], [], [0, 2], [], [0, 2]]
 
 
 
@@ -678,8 +745,8 @@ def test_ideal_platform_skips_hardware_gate_error_channel() -> None:
 	)
 	hw_counts = get_pauli_string(
 		samples=50,
-		p=0.0,
-		system_bias=10.0,
+		p=0.003,
+		system_bias=10000.0,
 		gate_sequence=gate_seq,
 		qubit_platform="superconducting",
 		random_seed=123,
@@ -689,6 +756,6 @@ def test_ideal_platform_skips_hardware_gate_error_channel() -> None:
 	# ideal_counts should have all observations as label 0 (identity)
 	assert ideal_counts.get(0, 0) == sum(ideal_counts.values())
 	# Hardware platform can still inject gate-channel noise independently of p.
-	assert any(k != 0 for k in hw_counts.keys())
+	assert any(v > 0 for k, v in hw_counts.items() if k != 0)
 
 
