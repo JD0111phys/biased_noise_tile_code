@@ -3,9 +3,9 @@ import os
 import importlib.util
 import sys
 
-import circuit_level_css
-import circuit_level_linear
-import circuit_level_xy
+import circuit_level_css_X_memory as circuit_level_css
+import circuit_level_linear_X_memory as circuit_level_linear
+import circuit_level_xy_X_memory as circuit_level_xy
 
 spec = importlib.util.spec_from_file_location("circuit_level_ti", "circuit_level_ti_(0.25,0.5)_X_memory.py")
 circuit_level_ti = importlib.util.module_from_spec(spec)
