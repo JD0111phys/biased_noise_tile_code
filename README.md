@@ -47,6 +47,6 @@ The code uses Python and requires the following packages:
 
 Example:
 
-python finite_bias_circuit_level_simulation/circuit_level_css.py 9 9 --bias 10000
+python finite_bias_circuit_level_simulation/circuit_level_css_X_memory.py 9 9 --bias 10000
 
 where `l` and `m` are the lattice dimensions and `bias` is the Z-bias parameter of the Pauli noise model.
