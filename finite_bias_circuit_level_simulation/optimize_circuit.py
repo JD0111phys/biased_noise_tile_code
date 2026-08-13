@@ -10,7 +10,7 @@ import numpy as np
 # the import works for any user who clones the repository.
 _repo_root = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_repo_root))
-from finite_bias_circuit_level_simulation.circuit_level_css import *
+from finite_bias_circuit_level_simulation.circuit_level_css_X_memory import *
 
 # Override finish_tile_code_circuit to interleave the loops!
 def finish_tile_code_circuit_interleaved(
