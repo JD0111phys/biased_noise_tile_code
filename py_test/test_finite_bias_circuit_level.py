@@ -13,7 +13,7 @@ sys.modules['stimbposd'] = MagicMock()
 project_root = Path(__file__).parent.parent
 sys.path.append(str(project_root))
 
-from finite_bias_circuit_level_simulation.circuit_level_css import (
+from finite_bias_circuit_level_simulation.circuit_level_css_X_memory import (
     xyz_from_bias,
     generate_circuit,
     CircuitGenParameters,
